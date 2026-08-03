@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restored usage cards and cache telemetry with Reasonix 1.19+ by consuming its advertised namespaced ACP status snapshot and update methods, while retaining compatibility with legacy usage updates.
+
 ## 0.3.0
 
 - Added a composer `+` menu with four actions: attach local files or images, reference workspace files or folders, reference past sessions, and insert slash commands. Attachments show as removable chips and are read at send time with size caps; images are sent as ACP `image` blocks when the backend supports them.

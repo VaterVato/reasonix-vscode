@@ -55,6 +55,7 @@ export interface AgentCapabilities {
     embeddedContext?: boolean;
   };
   mcpCapabilities?: { http?: boolean; sse?: boolean };
+  _meta?: Record<string, unknown>;
 }
 
 export interface AuthMethod {
@@ -257,6 +258,37 @@ export interface UsageData {
     cacheMissTokens: number;
     cacheHitTokens: number;
   };
+}
+
+export interface ReasonixStatusUsageValue {
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  estimated?: boolean;
+  cacheHitRatio?: number | null;
+  estimatedCost?: number | null;
+  currency?: string | null;
+  usageSource: string;
+}
+
+export interface ReasonixSessionStatus {
+  schemaVersion: number;
+  sequence: number;
+  sessionId: string;
+  usage: {
+    turn: ReasonixStatusUsageValue;
+    cumulative: ReasonixStatusUsageValue;
+  };
+}
+
+export interface ReasonixStatusUpdateParams {
+  schemaVersion: number;
+  sequence: number;
+  sessionId: string;
+  event: string;
+  status: ReasonixSessionStatus;
 }
 
 export interface ChangePreview {

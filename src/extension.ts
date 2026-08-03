@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { AcpClient } from "./acpClient";
+import { usageDataFromReasonixStatus } from "./acpProtocol";
 import type {
   AgentCapabilities,
   AuthMethod,
@@ -14,6 +15,7 @@ import type {
   ModelInfo,
   PermissionRequestParams,
   PermissionRequestResult,
+  ReasonixSessionStatus,
   SessionConfigOption,
   SessionModeState,
   SessionModelState,
@@ -1352,6 +1354,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         this.syncSessionState(state, sessionState);
         this.postSnapshot();
       },
+      onReasonixStatus: (status, event) => this.handleReasonixStatus(folder, status, event),
     });
     this.clients.set(key, client);
     try {
@@ -1436,6 +1439,32 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       state.usage = params.update.usage;
       this.updateStatusBar(folder);
     }
+    this.postSnapshot();
+  }
+
+  private handleReasonixStatus(folder: vscode.WorkspaceFolder, status: ReasonixSessionStatus, event?: string): void {
+    if (event !== undefined && event !== "usage") {
+      return;
+    }
+    const state = this.stateFor(folder);
+    if (state.sessionId && status.sessionId !== state.sessionId) {
+      this.appendOutput(`Ignored status for inactive session ${status.sessionId}`, folder);
+      return;
+    }
+    const usage = usageDataFromReasonixStatus(status);
+    const turnHasUsage = usage.totalTokens > 0 || usage.cacheHitTokens > 0 || usage.cacheMissTokens > 0 || usage.cost !== undefined;
+    const cumulative = status.usage.cumulative;
+    const sessionHasUsage = cumulative.promptTokens > 0 || cumulative.completionTokens > 0
+      || cumulative.cacheHitTokens > 0 || cumulative.cacheMissTokens > 0
+      || (cumulative.estimatedCost !== undefined && cumulative.estimatedCost !== null);
+    if (!turnHasUsage && !sessionHasUsage) {
+      return;
+    }
+    if (turnHasUsage) {
+      applySessionUpdate(state.items, { sessionUpdate: "usage", usage });
+    }
+    state.usage = usage;
+    this.updateStatusBar(folder);
     this.postSnapshot();
   }
 

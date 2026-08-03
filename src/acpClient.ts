@@ -5,9 +5,14 @@ import {
   parseFSReadTextFileParams,
   parseFSWriteTextFileParams,
   parsePermissionRequestParams,
+  parseReasonixSessionStatus,
+  parseReasonixStatusUpdateParams,
   parseSessionUpdateParams,
   parseTerminalCreateParams,
   parseTerminalIDParams,
+  REASONIX_STATUS_METHOD,
+  REASONIX_STATUS_UPDATE_METHOD,
+  supportsReasonixStatusMethod,
   type ProtocolParseResult,
 } from "./acpProtocol";
 import { redactLocalPaths } from "./sanitize";
@@ -23,6 +28,7 @@ import type {
   ModelListResult,
   PermissionRequestParams,
   PermissionRequestResult,
+  ReasonixSessionStatus,
   SessionConfigOption,
   SessionInfo,
   SessionListResult,
@@ -74,6 +80,7 @@ export type AcpClientOptions = {
   onDisconnect: (reason: string) => void;
   onSessionId: (sessionId: string) => void;
   onSessionState?: (state: SessionStateResult) => void;
+  onReasonixStatus?: (status: ReasonixSessionStatus, event?: string) => void;
 };
 
 export class AcpClient {
@@ -83,6 +90,7 @@ export class AcpClient {
   private runningPrompt = false;
   private initialized?: InitializeResult;
   private state: SessionStateResult = {};
+  private readonly statusSequences = new Map<string, number>();
 
   constructor(private readonly options: AcpClientOptions) {}
 
@@ -168,6 +176,7 @@ export class AcpClient {
       try {
         const resumed = await this.openExistingSession(previous);
         this.applySessionState(resumed);
+        await this.syncReasonixStatus();
         return { sessionId: previous, isNewSession: false };
       } catch (err) {
         this.appendLine(`Could not restore Reasonix session ${previous}: ${errorMessage(err)}`);
@@ -185,6 +194,7 @@ export class AcpClient {
     this.sessionId = created.sessionId;
     this.applySessionState(created);
     this.options.onSessionId(created.sessionId);
+    await this.syncReasonixStatus();
     return { sessionId: created.sessionId, isNewSession: true };
   }
 
@@ -290,6 +300,19 @@ export class AcpClient {
   }
 
   private handleNotification(method: string, params: unknown): void {
+    if (method === REASONIX_STATUS_UPDATE_METHOD) {
+      if (!supportsReasonixStatusMethod(this.capabilities, method)) {
+        this.appendLine(`Ignoring unadvertised ACP notification: ${method}`);
+        return;
+      }
+      const parsedStatus = parseReasonixStatusUpdateParams(params);
+      if (!parsedStatus.ok) {
+        this.appendLine(`Ignoring invalid Reasonix status update: ${parsedStatus.error}`);
+        return;
+      }
+      this.acceptReasonixStatus(parsedStatus.value.status, parsedStatus.value.event);
+      return;
+    }
     if (method !== "session/update") {
       this.appendLine(`Ignoring unsupported ACP notification: ${method}`);
       return;
@@ -306,6 +329,36 @@ export class AcpClient {
       this.applySessionState({ modes: { ...this.state.modes, currentModeId: update.currentModeId } });
     }
     this.options.onUpdate(parsed.value);
+  }
+
+  private async syncReasonixStatus(): Promise<void> {
+    if (!supportsReasonixStatusMethod(this.capabilities, REASONIX_STATUS_METHOD)) {
+      return;
+    }
+    try {
+      const raw = await this.requirePeer().sendRequest<unknown>(REASONIX_STATUS_METHOD, { sessionId: this.requireSession() });
+      const parsed = parseReasonixSessionStatus(raw);
+      if (!parsed.ok) {
+        this.appendLine(`Ignoring invalid Reasonix session status: ${parsed.error}`);
+        return;
+      }
+      this.acceptReasonixStatus(parsed.value);
+    } catch (err) {
+      this.appendLine(`Could not read Reasonix session status: ${errorMessage(err)}`);
+    }
+  }
+
+  private acceptReasonixStatus(status: ReasonixSessionStatus, event?: string): void {
+    if (status.sessionId !== this.sessionId) {
+      this.appendLine(`Ignoring Reasonix status for inactive session ${status.sessionId}`);
+      return;
+    }
+    const previous = this.statusSequences.get(status.sessionId);
+    if (previous !== undefined && status.sequence <= previous) {
+      return;
+    }
+    this.statusSequences.set(status.sessionId, status.sequence);
+    this.options.onReasonixStatus?.(status, event);
   }
 
   private async handleRequest(method: string, params: unknown): Promise<unknown> {
