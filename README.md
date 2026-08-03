@@ -3,7 +3,7 @@
 <p align="center">
   <strong>English</strong>
   &nbsp;·&nbsp;
-  <a href="./README.zh-CN.md">简体中文</a>
+  <a href="https://github.com/SivanCola/reasonix-vscode/blob/main/README.zh-CN.md">简体中文</a>
 </p>
 
 Reasonix for VS Code brings the local Reasonix coding agent into the editor. It implements the ACP v1 client surface used by Reasonix 1.0 (`main-v2`) and keeps the extension focused on IDE integration: chat, native sessions, editor resources, tool review, approvals and questions, terminals, models, modes, and plans.

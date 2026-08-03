@@ -1,7 +1,7 @@
 # Reasonix for VS Code
 
 <p align="center">
-  <a href="./README.md">English</a>
+  <a href="https://github.com/SivanCola/reasonix-vscode/blob/main/README.md">English</a>
   &nbsp;·&nbsp;
   <strong>简体中文</strong>
 </p>
