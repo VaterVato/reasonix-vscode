@@ -48,8 +48,13 @@ type TokenMode = "economy" | "balanced" | "delivery";
 type ToolApprovalMode = "ask" | "auto" | "yolo";
 
 export type HostToWebviewMessage =
-  | { type: "stateSnapshot"; state: unknown }
-  | { type: "notice"; text: string }
+  | { type: "stateSnapshot"; revision: number; state: unknown }
+  | {
+      type: "statePatch";
+      revision: number;
+      state: unknown;
+      transcript?: { start: number; deleteCount: number; items: unknown[] };
+    }
   | { type: "resourceSuggestions"; requestId: number; query: string; items: ResourceSuggestion[] }
   | { type: "attachmentsPicked"; attachments: PendingAttachment[] }
   | { type: "openSettings" };

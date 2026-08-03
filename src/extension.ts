@@ -32,6 +32,7 @@ import { buildPromptBlocks } from "./resourceMentions";
 import { suggestWorkspaceResources } from "./resourceSuggestions";
 import { redactLocalPaths } from "./sanitize";
 import { expandSlashCommand } from "./slashCommands";
+import { SnapshotSync } from "./snapshotSync";
 import { WorkspaceTerminalBridge } from "./terminalBridge";
 import { parseWebviewMessage } from "./webviewProtocol";
 
@@ -83,6 +84,8 @@ type ChatSnapshot = WorkspaceChatState & {
   settings: ReasonixSettings;
   sessions: SessionSummary[];
 };
+
+type ChatViewState = Omit<ChatSnapshot, "items">;
 
 type RuntimeSelectOption = {
   value: string;
@@ -153,7 +156,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("reasonix.openSettings", () => provider.openSettings()),
     vscode.commands.registerCommand("reasonix.showOutput", () => output.show()),
     vscode.window.onDidChangeActiveTextEditor(() => provider.refreshActiveWorkspace()),
-    vscode.window.onDidChangeTextEditorSelection(() => provider.refreshActiveWorkspace()),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         event.affectsConfiguration("reasonix.uiLanguage") ||
@@ -195,6 +197,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   private readonly sending = new Set<string>();
   private readonly reconnectAttempts = new Map<string, number>();
   private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
+  private readonly snapshotSync = new SnapshotSync<ChatItem>();
+  private snapshotTimer?: NodeJS.Timeout;
+  private snapshotWorkspaceKey?: string;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -216,6 +221,10 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       clearTimeout(timer);
     }
     this.reconnectTimers.clear();
+    if (this.snapshotTimer) {
+      clearTimeout(this.snapshotTimer);
+      this.snapshotTimer = undefined;
+    }
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -226,12 +235,32 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     };
     webviewView.webview.html = this.html(webviewView.webview);
     webviewView.webview.onDidReceiveMessage((raw) => void this.handleWebviewMessage(raw), undefined, this.context.subscriptions);
+    this.snapshotSync.reset();
+    this.snapshotWorkspaceKey = undefined;
     webviewView.onDidDispose(() => {
       if (this.view === webviewView) {
         this.view = undefined;
+        this.snapshotSync.reset();
+        this.snapshotWorkspaceKey = undefined;
+        if (this.snapshotTimer) {
+          clearTimeout(this.snapshotTimer);
+          this.snapshotTimer = undefined;
+        }
       }
     }, undefined, this.context.subscriptions);
-    this.postSnapshot();
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.snapshotSync.requireFullSnapshot();
+        this.postSnapshot(undefined, true);
+      } else {
+        this.snapshotSync.requireFullSnapshot();
+        if (this.snapshotTimer) {
+          clearTimeout(this.snapshotTimer);
+          this.snapshotTimer = undefined;
+        }
+      }
+    }, undefined, this.context.subscriptions);
+    this.postSnapshot(undefined, true);
 
     if (vscode.workspace.getConfiguration("reasonix").get<boolean>("autoStart", false)) {
       void this.ensureClient();
@@ -283,7 +312,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     state.toolApprovalMode = undefined;
     state.availableCommands = undefined;
     await this.context.workspaceState.update(this.sessionStorageKey(folder), undefined);
-    this.postSnapshot();
+    this.postSnapshot(0);
     await this.ensureClient(folder);
   }
 
@@ -305,9 +334,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     const key = workspaceKey(folder);
     const state = this.stateFor(folder);
     this.clients.get(key)?.cancel();
-    this.clearPendingApprovals(key);
+    const transcriptStart = this.clearPendingApprovals(key);
     state.status = "Cancelling";
-    this.postSnapshot();
+    this.postSnapshot(transcriptStart);
   }
 
   async pickModel(): Promise<void> {
@@ -778,7 +807,8 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         await this.postResourceSuggestions(message.requestId, message.query);
         return;
       case "stateSnapshot":
-        this.postSnapshot();
+        this.snapshotSync.requireFullSnapshot();
+        this.postSnapshot(undefined, true);
         return;
       default:
         assertNever(message);
@@ -864,7 +894,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     state.toolApprovalMode = undefined;
     state.availableCommands = undefined;
     await this.context.workspaceState.update(this.sessionStorageKey(folder), sessionId);
-    this.postSnapshot();
+    this.postSnapshot(0);
     await this.ensureClient(folder);
   }
 
@@ -899,16 +929,18 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       state.sessions = (state.sessions ?? []).filter((session) => session.id !== sessionId);
       const history = this.sessionHistory(folder).filter((session) => session.id !== sessionId);
       await this.context.workspaceState.update(this.sessionHistoryKey(folder), history);
+      let transcriptReset = false;
       if (state.sessionId === sessionId) {
         client.dispose();
         this.clients.delete(workspaceKey(folder));
         await this.context.workspaceState.update(this.sessionStorageKey(folder), undefined);
         state.items = [];
+        transcriptReset = true;
         state.sessionId = undefined;
         state.sessionTitle = undefined;
         state.status = "Session deleted";
       }
-      this.postSnapshot();
+      this.postSnapshot(transcriptReset ? 0 : undefined);
     } catch (err) {
       void vscode.window.showErrorMessage(`Could not delete Reasonix session: ${errorMessage(err)}`);
     }
@@ -978,7 +1010,12 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       attachments.push({ kind, name, uri: uri.toString(), mimeType });
     }
     if (skippedImage) {
-      void this.view?.webview.postMessage({ type: "notice", text: "The connected Reasonix does not support image prompts; image files were skipped." });
+      const text = "The connected Reasonix does not support image prompts; image files were skipped.";
+      if (state) {
+        this.postSnapshot(appendNotice(state.items, text));
+      } else {
+        void vscode.window.showWarningMessage(text);
+      }
     }
     if (attachments.length > 0) {
       void this.view?.webview.postMessage({ type: "attachmentsPicked", attachments });
@@ -1146,9 +1183,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
           }
           blocks = [...blocks, ...attachmentBlocks];
         } catch (err) {
-          appendNotice(state.items, `Attachment failed: ${errorMessage(err)}`);
+          const transcriptStart = appendNotice(state.items, `Attachment failed: ${errorMessage(err)}`);
           this.appendOutput(`Attachment read failed: ${errorMessage(err)}`, folder);
-          this.postSnapshot();
+          this.postSnapshot(transcriptStart);
           return;
         }
       }
@@ -1160,21 +1197,21 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         this.appendOutput(`Attached ${withMentions.mentions.length} @ resource mention(s): ${withMentions.mentions.map((mention) => mention.relativePath).join(", ")}`, folder);
       }
       const visiblePrompt = displayText.trim() || trimmed || attachments.map((attachment) => attachment.name).join(", ");
-      appendUserMessage(state.items, visiblePrompt);
+      const userMessageIndex = appendUserMessage(state.items, visiblePrompt);
       await this.updateCurrentSessionTitle(folder, visiblePrompt);
       state.running = true;
       state.status = "Sending";
-      this.postSnapshot();
+      this.postSnapshot(userMessageIndex);
 
       try {
         const result = await client.sendPrompt(blocks);
         if (result.stopReason === "cancelled") {
-          appendNotice(state.items, "Turn cancelled.");
+          this.postSnapshot(appendNotice(state.items, "Turn cancelled."));
         } else if (result.stopReason === "error") {
-          appendNotice(state.items, "Turn ended with an error. Check the Reasonix output channel.");
+          this.postSnapshot(appendNotice(state.items, "Turn ended with an error. Check the Reasonix output channel."));
         }
       } catch (err) {
-        appendNotice(state.items, `Reasonix error: ${errorMessage(err)}`);
+        this.postSnapshot(appendNotice(state.items, `Reasonix error: ${errorMessage(err)}`));
         this.appendOutput(`Reasonix prompt failed: ${errorMessage(err)}`, folder);
       } finally {
         state.running = false;
@@ -1336,13 +1373,13 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         if (this.clients.get(key) !== client) {
           return;
         }
-        this.clearPendingApprovals(key);
+        const transcriptStart = this.clearPendingApprovals(key);
         this.clients.delete(key);
         this.disposeTerminalBridge(key);
         state.disconnected = true;
         state.running = false;
         state.status = "Disconnected";
-        this.postSnapshot();
+        this.postSnapshot(transcriptStart);
         this.scheduleReconnect(folder);
       },
       onSessionId: (sessionId) => {
@@ -1379,9 +1416,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       this.disposeTerminalBridge(key);
       state.disconnected = true;
       state.status = "Start failed";
-      appendNotice(state.items, `Could not start Reasonix: ${errorMessage(err)}`);
+      const transcriptStart = appendNotice(state.items, `Could not start Reasonix: ${errorMessage(err)}`);
       this.appendOutput(`Reasonix start failed: ${errorMessage(err)}`, folder);
-      this.postSnapshot();
+      this.postSnapshot(transcriptStart);
       return undefined;
     }
   }
@@ -1392,7 +1429,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       this.appendOutput(`Ignored update for inactive session ${params.sessionId}`, folder);
       return;
     }
-    applySessionUpdate(state.items, params.update);
+    const transcriptStart = applySessionUpdate(state.items, params.update);
     switch (params.update.sessionUpdate) {
       case "agent_thought_chunk":
         state.status = "Thinking";
@@ -1439,7 +1476,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       state.usage = params.update.usage;
       this.updateStatusBar(folder);
     }
-    this.postSnapshot();
+    this.postSnapshot(transcriptStart);
   }
 
   private handleReasonixStatus(folder: vscode.WorkspaceFolder, status: ReasonixSessionStatus, event?: string): void {
@@ -1473,13 +1510,12 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     const approvalMode = this.toolApprovalMode(state);
     const autoResult = this.toolApprovalOption(state) ? undefined : this.autoPermissionResult(params, approvalMode);
     if (autoResult) {
-      appendNotice(state.items, `${permissionModeNotice(approvalMode)}: ${params.toolCall.title ?? "tool"}`);
-      this.postSnapshot();
+      this.postSnapshot(appendNotice(state.items, `${permissionModeNotice(approvalMode)}: ${params.toolCall.title ?? "tool"}`));
       return autoResult;
     }
-    appendApproval(state.items, params);
+    const approvalIndex = appendApproval(state.items, params);
     state.status = isQuestionRequest(params) ? "Waiting for answer" : "Waiting for approval";
-    this.postSnapshot();
+    this.postSnapshot(approvalIndex);
     if (!isQuestionRequest(params)) {
       try {
         await this.preview.previewPermission(params, folder);
@@ -1490,8 +1526,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 
     if (!this.view) {
       const result = await this.modalPermission(params);
-      resolveApprovalItem(state.items, params.toolCall.toolCallId, result.outcome.outcome === "selected");
-      this.postSnapshot();
+      this.postSnapshot(resolveApprovalItem(state.items, params.toolCall.toolCallId, result.outcome.outcome === "selected"));
       return result;
     }
     return await new Promise<PermissionRequestResult>((resolve) => {
@@ -1555,19 +1590,24 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         ? { outcome: { outcome: "selected", optionId: option.optionId } }
         : { outcome: { outcome: "cancelled" } };
     }
-    resolveApprovalItem(state?.items ?? [], id, result.outcome.outcome === "selected");
+    const transcriptStart = resolveApprovalItem(state?.items ?? [], id, result.outcome.outcome === "selected");
     pending.resolve(result);
-    this.postSnapshot();
+    this.postSnapshot(transcriptStart);
   }
 
-  private clearPendingApprovals(stateKey: string): void {
+  private clearPendingApprovals(stateKey: string): number | undefined {
+    let transcriptStart: number | undefined;
     for (const [id, pending] of this.pendingApprovals) {
       if (pending.stateKey === stateKey) {
         this.pendingApprovals.delete(id);
-        resolveApprovalItem(this.states.get(stateKey)?.items ?? [], id, false);
+        const changed = resolveApprovalItem(this.states.get(stateKey)?.items ?? [], id, false);
+        if (changed !== undefined) {
+          transcriptStart = transcriptStart === undefined ? changed : Math.min(transcriptStart, changed);
+        }
         pending.resolve({ outcome: { outcome: "cancelled" } });
       }
     }
+    return transcriptStart;
   }
 
   private syncSessionState(state: WorkspaceChatState, sessionState: Readonly<SessionStateResult>): void {
@@ -1604,8 +1644,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     const attempt = (this.reconnectAttempts.get(key) ?? 0) + 1;
     if (attempt > 3) {
       state.status = "Reconnect failed";
-      appendNotice(state.items, "Reasonix disconnected repeatedly. Send another prompt to retry, or check the output channel.");
-      this.postSnapshot();
+      this.postSnapshot(appendNotice(state.items, "Reasonix disconnected repeatedly. Send another prompt to retry, or check the output channel."));
       return;
     }
     this.reconnectAttempts.set(key, attempt);
@@ -1650,9 +1689,38 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     }
   }
 
-  private postSnapshot(): void {
+  private postSnapshot(transcriptStart?: number, immediate = false): void {
+    this.snapshotSync.markTranscriptChanged(transcriptStart);
+    if (!this.view?.visible) {
+      return;
+    }
+    if (immediate) {
+      if (this.snapshotTimer) {
+        clearTimeout(this.snapshotTimer);
+        this.snapshotTimer = undefined;
+      }
+      this.flushSnapshot();
+      return;
+    }
+    if (!this.snapshotTimer) {
+      this.snapshotTimer = setTimeout(() => {
+        this.snapshotTimer = undefined;
+        this.flushSnapshot();
+      }, 16);
+    }
+  }
+
+  private flushSnapshot(): void {
+    const view = this.view;
+    if (!view?.visible) {
+      return;
+    }
     const folder = this.currentWorkspaceFolder();
     const state = folder ? this.stateFor(folder) : emptyState();
+    const activeWorkspaceKey = folder ? workspaceKey(folder) : "";
+    if (activeWorkspaceKey !== this.snapshotWorkspaceKey) {
+      this.snapshotSync.markTranscriptChanged(0);
+    }
     const contextMode = configuredSelectionMode();
     const snapshot: ChatSnapshot = {
       ...state,
@@ -1678,8 +1746,14 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       settings: currentSettings(),
       sessions: folder ? (state.sessions ?? this.sessionHistory(folder)) : [],
     };
+    const { items, ...viewState } = snapshot;
     this.updateStatusBar(folder);
-    void this.view?.webview.postMessage({ type: "stateSnapshot", state: snapshot });
+    this.snapshotWorkspaceKey = activeWorkspaceKey;
+    void view.webview.postMessage(this.snapshotSync.next(viewState satisfies ChatViewState, items)).then((delivered) => {
+      if (!delivered) {
+        this.snapshotSync.requireFullSnapshot();
+      }
+    });
   }
 
   private modelLabel(state: WorkspaceChatState): string {
