@@ -205,6 +205,24 @@ button.secondary:hover,
   padding: 11px 10px 18px;
 }
 
+.transcript-history {
+  display: block;
+  width: fit-content;
+  margin: 2px auto 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--vscode-button-secondaryBackground, var(--vscode-sideBar-border));
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.transcript-history:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
 .transcript[hidden],
 .settings-view[hidden],
 .composer[hidden] {

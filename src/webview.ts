@@ -4,6 +4,7 @@ import type { ChatItem } from "./chatState";
 import { getComposerTrigger, replaceComposerTrigger, slashSuggestions, type ComposerTrigger } from "./composerSuggestions";
 import { shouldSubmitPromptOnKeydown } from "./keyboard";
 import type { ResourceSuggestion } from "./resourceSuggestions";
+import { applyTranscriptSplice, transcriptWindowStart, type TranscriptSplice } from "./snapshotSync";
 import type { HostToWebviewMessage } from "./webviewProtocol";
 
 declare function acquireVsCodeApi(): {
@@ -84,6 +85,16 @@ type RuntimeSelectOption = {
 
 type RuntimeMenu = "model" | "effort";
 
+type PersistedWebviewState = {
+  version: 1;
+  draft: string;
+  scrollTop: number;
+};
+
+const TRANSCRIPT_WINDOW_SIZE = 200;
+const TRANSCRIPT_LOAD_BATCH = 100;
+const MAX_EXPANDED_TRANSCRIPT_ITEMS = 1000;
+
 const vscode = acquireVsCodeApi();
 const transcript = mustElement("transcript");
 const settingsView = mustElement("settingsView");
@@ -137,7 +148,12 @@ const settingsToolbarActions = mustElement("settingsToolbarActions");
 const settingsBackButton = mustElement("settingsBackButton") as HTMLButtonElement;
 const settingsModeTitle = mustElement("settingsModeTitle");
 
-let snapshot: Snapshot = normalizeSnapshot(vscode.getState());
+const persistedState = normalizePersistedWebviewState(vscode.getState());
+let snapshot: Snapshot = emptySnapshot();
+let snapshotRevision = 0;
+let renderedTranscriptStart = 0;
+let persistTimer: number | undefined;
+let restoredScrollTop: number | undefined = persistedState.scrollTop;
 let sessionMenuOpen = false;
 let contextMenuOpen = false;
 let contextMenuMode: "root" | "sessions" = "root";
@@ -156,6 +172,8 @@ let compositionActive = false;
 let suggestionState: SuggestionState = emptySuggestionState();
 let resourceSuggestionRequestId = 0;
 let pendingAttachments: PendingAttachment[] = [];
+
+prompt.value = persistedState.draft;
 
 type SuggestionState = {
   trigger?: ComposerTrigger;
@@ -201,7 +219,10 @@ prompt.addEventListener("input", () => {
   resizePrompt();
   updateSendButton(snapshot);
   updateComposerSuggestions();
+  schedulePersistedState();
 });
+
+transcript.addEventListener("scroll", schedulePersistedState, { passive: true });
 
 prompt.addEventListener("click", () => {
   updateComposerSuggestions();
@@ -531,6 +552,11 @@ function handleSessionClick(event: MouseEvent): void {
 transcript.addEventListener("click", (event) => {
   const target = event.target as Element | null;
 
+  if (target?.closest("button[data-load-earlier]")) {
+    loadEarlierTranscriptItems();
+    return;
+  }
+
   const approval = target?.closest<HTMLButtonElement>("button[data-approval-id]");
   if (approval) {
     vscode.postMessage({
@@ -681,21 +707,60 @@ settingsView.addEventListener("keydown", (event) => {
 window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) => {
   const message = event.data;
   switch (message.type) {
-    case "stateSnapshot":
+    case "stateSnapshot": {
+      if (!isValidRevision(message.revision)) {
+        requestFullSnapshot();
+        return;
+      }
       const completedRuntimeSelection = runtimeSelectionPending;
       const completedControlSelection = controlSelectionPending;
       runtimeSelectionPending = undefined;
       controlSelectionPending = undefined;
+      snapshotRevision = message.revision;
       snapshot = normalizeSnapshot(message.state);
       syncComposerAxes(snapshot);
-      vscode.setState(snapshot);
-      render(snapshot);
+      renderedTranscriptStart = transcriptWindowStart(snapshot.items.length, TRANSCRIPT_WINDOW_SIZE);
+      render(snapshot, true);
+      if (restoredScrollTop !== undefined) {
+        const scrollTop = restoredScrollTop;
+        restoredScrollTop = undefined;
+        requestAnimationFrame(() => {
+          transcript.scrollTop = Math.min(scrollTop, transcript.scrollHeight);
+        });
+      }
       completedRuntimeSelection && runtimeMenuButton(completedRuntimeSelection).focus();
       completedControlSelection && controlButton(completedControlSelection).focus();
       return;
-    case "notice":
-      appendNotice(message.text);
+    }
+    case "statePatch": {
+      if (!isValidRevision(message.revision) || message.revision !== snapshotRevision + 1) {
+        requestFullSnapshot();
+        return;
+      }
+      const transcriptPatch = normalizeTranscriptSplice(message.transcript);
+      if (message.transcript !== undefined && !transcriptPatch) {
+        requestFullSnapshot();
+        return;
+      }
+      const oldLength = snapshot.items.length;
+      const wasFollowingLatest = renderedTranscriptStart >= transcriptWindowStart(oldLength, TRANSCRIPT_WINDOW_SIZE);
+      if (transcriptPatch && !applyTranscriptSplice(snapshot.items, transcriptPatch)) {
+        requestFullSnapshot();
+        return;
+      }
+      const previousLocale = snapshot.locale;
+      const previousControls = controlRenderKey(snapshot);
+      snapshotRevision = message.revision;
+      snapshot = normalizeSnapshot({ ...(isRecord(message.state) ? message.state : {}), items: snapshot.items });
+      syncComposerAxes(snapshot);
+      render(snapshot, false, previousControls !== controlRenderKey(snapshot));
+      if (transcriptPatch) {
+        patchTranscript(transcriptPatch, oldLength, wasFollowingLatest);
+      } else if (snapshot.locale !== previousLocale) {
+        renderTranscriptWindow(snapshot);
+      }
       return;
+    }
     case "attachmentsPicked":
       addAttachments(message.attachments);
       focusPromptSoon();
@@ -711,10 +776,10 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
   }
 });
 
-vscode.postMessage({ command: "stateSnapshot" });
+requestFullSnapshot();
 
-function render(state: Snapshot): void {
-  const shouldStickToBottom = !settingsOpen && (state.running || transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80);
+function render(state: Snapshot, refreshTranscript = false, refreshControls = true): void {
+  const shouldStickToBottom = refreshTranscript && !settingsOpen && (state.running || transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80);
 
   status.textContent = state.disconnected ? label("disconnected") : state.status;
   status.title = state.workspace;
@@ -727,41 +792,8 @@ function render(state: Snapshot): void {
   workspaceName.textContent = state.workspace;
   workspaceName.title = state.workspace;
   toolbarMeta.textContent = toolbarMetaText(state);
-  sessionMenu.textContent = label("sessions");
-  sessionMenu.textContent = "☰";
-  sessionMenu.title = label("sessions");
-  sessionMenu.setAttribute("aria-label", label("sessions"));
-  newSession.textContent = "+";
-  newSession.title = label("new");
-  newSession.setAttribute("aria-label", label("new"));
-  railNewSessionLabel.textContent = label("new");
-  railNewSession.title = label("new");
-  railNewSession.setAttribute("aria-label", label("new"));
-  sessionRailTitle.textContent = label("sessions");
   runtimeModelLabel.textContent = shortModelLabel(state.modelLabel);
   runtimeEffortLabel.textContent = shortEffortLabel(state.effortLabel);
-  runtimeModelButton.title = `${label("pickModel")}: ${state.modelLabel}`;
-  runtimeModelButton.setAttribute("aria-label", runtimeModelButton.title);
-  runtimeEffortButton.title = state.effortSupported
-    ? `${label("reasoningEffort")}: ${state.effortLabel}`
-    : label("effortUnavailable");
-  runtimeEffortButton.setAttribute("aria-label", runtimeEffortButton.title);
-  runtimeModelButton.setAttribute("aria-expanded", String(runtimeMenuOpen === "model"));
-  runtimeEffortButton.setAttribute("aria-expanded", String(runtimeMenuOpen === "effort"));
-  settingsButton.textContent = "⚙";
-  settingsButton.title = label("settings");
-  settingsButton.setAttribute("aria-label", label("settings"));
-  settingsBackButton.textContent = label("done");
-  settingsModeTitle.textContent = label("settings");
-  collaborationButton.title = `${label("executionMethod")}: ${collaborationModeText(collaborationMode)}`;
-  collaborationButton.setAttribute("aria-label", `${label("executionMethod")}: ${collaborationModeText(collaborationMode)}`);
-  collaborationButton.setAttribute("aria-haspopup", "menu");
-  collaborationButton.setAttribute("aria-expanded", String(collaborationMenuOpen));
-  controlsApprovalLabel.textContent = label("toolApprovals");
-  contextButton.title = label("addContext");
-  contextButton.setAttribute("aria-label", label("addContext"));
-  composerHint.textContent = label("composerHint");
-  prompt.placeholder = label("placeholder");
   newSession.disabled = state.running;
   railNewSession.disabled = state.running;
   collaborationButton.disabled = state.running;
@@ -793,27 +825,164 @@ function render(state: Snapshot): void {
     contextMenuOpen = false;
     runtimeMenuOpen = undefined;
   }
-  collaborationButton.setAttribute("aria-expanded", String(collaborationMenuOpen));
-  workModeButton.setAttribute("aria-expanded", String(workModeMenuOpen));
   updateSendButton(state);
-  updateModeUi();
-  renderAttachmentTray();
-  renderMenus(state);
-  renderSettings(state);
-
-  transcript.textContent = "";
-  if (state.items.length === 0) {
-    transcript.append(renderEmptyState(state));
-  } else {
-    state.items.forEach((item, index) => transcript.append(renderItem(item, index)));
+  if (refreshControls) {
+    sessionMenu.textContent = "☰";
+    sessionMenu.title = label("sessions");
+    sessionMenu.setAttribute("aria-label", label("sessions"));
+    newSession.textContent = "+";
+    newSession.title = label("new");
+    newSession.setAttribute("aria-label", label("new"));
+    railNewSessionLabel.textContent = label("new");
+    railNewSession.title = label("new");
+    railNewSession.setAttribute("aria-label", label("new"));
+    sessionRailTitle.textContent = label("sessions");
+    runtimeModelButton.title = `${label("pickModel")}: ${state.modelLabel}`;
+    runtimeModelButton.setAttribute("aria-label", runtimeModelButton.title);
+    runtimeEffortButton.title = state.effortSupported
+      ? `${label("reasoningEffort")}: ${state.effortLabel}`
+      : label("effortUnavailable");
+    runtimeEffortButton.setAttribute("aria-label", runtimeEffortButton.title);
+    runtimeModelButton.setAttribute("aria-expanded", String(runtimeMenuOpen === "model"));
+    runtimeEffortButton.setAttribute("aria-expanded", String(runtimeMenuOpen === "effort"));
+    settingsButton.textContent = "⚙";
+    settingsButton.title = label("settings");
+    settingsButton.setAttribute("aria-label", label("settings"));
+    settingsBackButton.textContent = label("done");
+    settingsModeTitle.textContent = label("settings");
+    collaborationButton.title = `${label("executionMethod")}: ${collaborationModeText(collaborationMode)}`;
+    collaborationButton.setAttribute("aria-label", `${label("executionMethod")}: ${collaborationModeText(collaborationMode)}`);
+    collaborationButton.setAttribute("aria-haspopup", "menu");
+    collaborationButton.setAttribute("aria-expanded", String(collaborationMenuOpen));
+    controlsApprovalLabel.textContent = label("toolApprovals");
+    contextButton.title = label("addContext");
+    contextButton.setAttribute("aria-label", label("addContext"));
+    composerHint.textContent = label("composerHint");
+    prompt.placeholder = label("placeholder");
+    collaborationButton.setAttribute("aria-expanded", String(collaborationMenuOpen));
+    workModeButton.setAttribute("aria-expanded", String(workModeMenuOpen));
+    updateModeUi();
+    renderAttachmentTray();
+    renderMenus(state);
+    renderSettings(state);
   }
 
-  if (shouldStickToBottom) {
+  if (refreshTranscript) {
+    renderTranscriptWindow(state);
+  }
+
+  if (refreshTranscript && shouldStickToBottom) {
     requestAnimationFrame(() => {
       transcript.scrollTop = transcript.scrollHeight;
     });
   }
   resizePrompt();
+}
+
+function controlRenderKey(state: Snapshot): string {
+  return JSON.stringify({
+    disconnected: state.disconnected,
+    running: state.running,
+    workspace: state.workspace,
+    contextMode: state.contextMode,
+    modelLabel: state.modelLabel,
+    effortLabel: state.effortLabel,
+    effortSupported: state.effortSupported,
+    modelOptions: state.modelOptions,
+    effortOptions: state.effortOptions,
+    executionMode: state.executionMode,
+    executionOptions: state.executionOptions,
+    workMode: state.workMode,
+    workModeOptions: state.workModeOptions,
+    toolApprovalMode: state.toolApprovalMode,
+    toolApprovalOptions: state.toolApprovalOptions,
+    locale: state.locale,
+    settings: state.settings,
+    sessions: state.sessions,
+    mcp: state.mcp,
+  });
+}
+
+function requestFullSnapshot(): void {
+  vscode.postMessage({ command: "stateSnapshot" });
+}
+
+function renderTranscriptWindow(state: Snapshot): void {
+  transcript.textContent = "";
+  if (state.items.length === 0) {
+    transcript.append(renderEmptyState(state));
+    renderedTranscriptStart = 0;
+    return;
+  }
+  renderedTranscriptStart = Math.min(renderedTranscriptStart, transcriptWindowStart(state.items.length, 1));
+  appendTranscriptHistoryControl();
+  for (let index = renderedTranscriptStart; index < state.items.length; index += 1) {
+    transcript.append(renderItem(state.items[index], index));
+  }
+}
+
+function patchTranscript(patch: TranscriptSplice<ChatItem>, oldLength: number, wasFollowingLatest: boolean): void {
+  if (snapshot.items.length === 0) {
+    renderTranscriptWindow(snapshot);
+    return;
+  }
+  const defaultStart = transcriptWindowStart(snapshot.items.length, TRANSCRIPT_WINDOW_SIZE);
+  if (wasFollowingLatest) {
+    renderedTranscriptStart = defaultStart;
+  } else if (patch.start < renderedTranscriptStart) {
+    renderedTranscriptStart = Math.max(0, renderedTranscriptStart + snapshot.items.length - oldLength);
+  }
+  renderedTranscriptStart = Math.max(
+    renderedTranscriptStart,
+    transcriptWindowStart(snapshot.items.length, MAX_EXPANDED_TRANSCRIPT_ITEMS),
+  );
+
+  if (patch.start < renderedTranscriptStart || !transcript.querySelector("[data-transcript-item]")) {
+    renderTranscriptWindow(snapshot);
+    return;
+  }
+
+  for (const node of Array.from(transcript.querySelectorAll<HTMLElement>("[data-transcript-item]"))) {
+    const index = Number(node.dataset.itemIndex);
+    if (!Number.isInteger(index) || index >= patch.start || index < renderedTranscriptStart) {
+      node.remove();
+    }
+  }
+  for (let index = Math.max(patch.start, renderedTranscriptStart); index < snapshot.items.length; index += 1) {
+    transcript.append(renderItem(snapshot.items[index], index));
+  }
+  appendTranscriptHistoryControl();
+
+  if (snapshot.running || transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80) {
+    requestAnimationFrame(() => {
+      transcript.scrollTop = transcript.scrollHeight;
+    });
+  }
+}
+
+function appendTranscriptHistoryControl(): void {
+  transcript.querySelector("[data-load-earlier]")?.remove();
+  if (renderedTranscriptStart === 0) {
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "transcript-history";
+  button.dataset.loadEarlier = "true";
+  button.textContent = label("earlierMessages");
+  transcript.prepend(button);
+}
+
+function loadEarlierTranscriptItems(): void {
+  if (renderedTranscriptStart === 0) {
+    return;
+  }
+  const previousHeight = transcript.scrollHeight;
+  renderedTranscriptStart = Math.max(0, renderedTranscriptStart - TRANSCRIPT_LOAD_BATCH);
+  renderTranscriptWindow(snapshot);
+  requestAnimationFrame(() => {
+    transcript.scrollTop += transcript.scrollHeight - previousHeight;
+  });
 }
 
 function updateSendButton(state: Snapshot): void {
@@ -848,6 +1017,7 @@ function insertComposerTrigger(token: "@" | "/"): void {
   resizePrompt();
   updateSendButton(snapshot);
   updateComposerSuggestions();
+  schedulePersistedState();
 }
 
 function updateModeUi(): void {
@@ -1778,20 +1948,30 @@ function settingsActionButton(action: string, text: string): HTMLButtonElement {
 }
 
 function renderItem(item: ChatItem, index: number): HTMLElement {
+  let node: HTMLElement;
   switch (item.type) {
     case "message":
-      return renderMessage(item, index);
+      node = renderMessage(item, index);
+      break;
     case "tool":
-      return renderTool(item, index);
+      node = renderTool(item, index);
+      break;
     case "usage":
-      return renderUsage(item.usage, index);
+      node = renderUsage(item.usage, index);
+      break;
     case "approval":
-      return renderApproval(item, index);
+      node = renderApproval(item, index);
+      break;
     case "question":
-      return renderQuestion(item);
+      node = renderQuestion(item);
+      break;
     case "plan":
-      return renderPlan(item);
+      node = renderPlan(item);
+      break;
   }
+  node.dataset.transcriptItem = "true";
+  node.dataset.itemIndex = String(index);
+  return node;
 }
 
 function renderMessage(item: Extract<ChatItem, { type: "message" }>, index: number): HTMLElement {
@@ -2408,6 +2588,7 @@ function acceptSuggestion(index: number): void {
   resizePrompt();
   updateSendButton(snapshot);
   closeSuggestions();
+  schedulePersistedState();
 }
 
 function closeSuggestions(): void {
@@ -2529,11 +2710,6 @@ function saveTextSetting(key: "binaryPath" | "model"): void {
   updateSetting(key, input.value);
 }
 
-function appendNotice(text: string): void {
-  snapshot.items.push({ type: "message", role: "notice", text });
-  render(snapshot);
-}
-
 function submitPrompt(): void {
   if (snapshot.running) {
     vscode.postMessage({ command: "cancel" });
@@ -2547,6 +2723,7 @@ function submitPrompt(): void {
   pendingAttachments = [];
   vscode.postMessage({ command: "sendPrompt", text, collaborationMode, tokenMode, toolApprovalMode, attachments });
   prompt.value = "";
+  schedulePersistedState();
   resizePrompt();
   renderAttachmentTray();
   updateSendButton(snapshot);
@@ -2556,6 +2733,51 @@ function submitPrompt(): void {
 function resizePrompt(): void {
   prompt.style.height = "auto";
   prompt.style.height = `${Math.min(prompt.scrollHeight, 180)}px`;
+}
+
+function schedulePersistedState(): void {
+  if (persistTimer !== undefined) {
+    window.clearTimeout(persistTimer);
+  }
+  persistTimer = window.setTimeout(() => {
+    persistTimer = undefined;
+    persistWebviewState();
+  }, 150);
+}
+
+function persistWebviewState(): void {
+  vscode.setState({
+    version: 1,
+    draft: prompt.value,
+    scrollTop: Math.max(0, Math.round(transcript.scrollTop)),
+  } satisfies PersistedWebviewState);
+}
+
+function normalizePersistedWebviewState(value: unknown): PersistedWebviewState {
+  if (!isRecord(value) || value.version !== 1) {
+    return { version: 1, draft: "", scrollTop: 0 };
+  }
+  return {
+    version: 1,
+    draft: typeof value.draft === "string" ? value.draft.slice(0, 100_000) : "",
+    scrollTop: typeof value.scrollTop === "number" && Number.isFinite(value.scrollTop) && value.scrollTop >= 0 ? value.scrollTop : 0,
+  };
+}
+
+function normalizeTranscriptSplice(value: unknown): TranscriptSplice<ChatItem> | undefined {
+  if (!isRecord(value) || !Number.isInteger(value.start) || !Number.isInteger(value.deleteCount) || !Array.isArray(value.items)) {
+    return undefined;
+  }
+  const start = value.start as number;
+  const deleteCount = value.deleteCount as number;
+  if (start < 0 || deleteCount < 0) {
+    return undefined;
+  }
+  return { start, deleteCount, items: value.items as ChatItem[] };
+}
+
+function isValidRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function emptySnapshot(): Snapshot {
@@ -3000,6 +3222,7 @@ type LabelKey =
   | "deleteSession"
   | "done"
   | "edit"
+  | "earlierMessages"
   | "english"
   | "execute"
   | "explainFile"
@@ -3158,6 +3381,7 @@ const labels: Record<"en" | "zh", Record<LabelKey, string>> = {
     deleteSession: "Delete session",
     done: "Done",
     edit: "edit",
+    earlierMessages: "Show earlier messages",
     english: "English",
     execute: "execute",
     explainFile: "Explain file",
@@ -3315,6 +3539,7 @@ const labels: Record<"en" | "zh", Record<LabelKey, string>> = {
     deleteSession: "删除会话",
     done: "完成",
     edit: "编辑",
+    earlierMessages: "显示更早的消息",
     english: "英文",
     execute: "执行",
     explainFile: "解释文件",
@@ -3423,4 +3648,5 @@ function label(key: LabelKey): string {
   return labels[snapshot.locale.toLowerCase().startsWith("zh") ? "zh" : "en"][key];
 }
 
-render(snapshot);
+render(snapshot, true);
+persistWebviewState();

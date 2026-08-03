@@ -44,18 +44,18 @@ export type ChatItem =
       entries: PlanEntry[];
     };
 
-export function appendUserMessage(items: ChatItem[], text: string): void {
-  items.push({ type: "message", role: "user", text });
+export function appendUserMessage(items: ChatItem[], text: string): number {
+  return items.push({ type: "message", role: "user", text }) - 1;
 }
 
-export function appendNotice(items: ChatItem[], text: string): void {
-  items.push({ type: "message", role: "notice", text });
+export function appendNotice(items: ChatItem[], text: string): number {
+  return items.push({ type: "message", role: "notice", text }) - 1;
 }
 
-export function appendApproval(items: ChatItem[], params: PermissionRequestParams): void {
+export function appendApproval(items: ChatItem[], params: PermissionRequestParams): number {
   if (isQuestionRequest(params)) {
     const detail = params.toolCall.content?.map((part) => contentText(part.content)).filter(Boolean).join("\n");
-    items.push({
+    return items.push({
       type: "question",
       id: params.toolCall.toolCallId,
       title: params.toolCall.title ?? "Question",
@@ -64,10 +64,9 @@ export function appendApproval(items: ChatItem[], params: PermissionRequestParam
         .filter((option) => !option.optionId.endsWith(":cancel") && !option.kind.startsWith("reject"))
         .map((option) => ({ optionId: option.optionId, name: option.name })),
       status: "pending",
-    });
-    return;
+    }) - 1;
   }
-  items.push({
+  return items.push({
     type: "approval",
     id: params.toolCall.toolCallId,
     title: params.toolCall.title ?? params.toolCall.toolCallId,
@@ -76,42 +75,42 @@ export function appendApproval(items: ChatItem[], params: PermissionRequestParam
     preview: params.toolCall.preview,
     options: params.options,
     status: "pending",
-  });
+  }) - 1;
 }
 
-export function resolveApproval(items: ChatItem[], id: string, selected: boolean): void {
-  const item = items.find((candidate): candidate is Extract<ChatItem, { type: "approval" | "question" }> =>
+export function resolveApproval(items: ChatItem[], id: string, selected: boolean): number | undefined {
+  const index = items.findIndex((candidate) =>
     (candidate.type === "approval" || candidate.type === "question") && candidate.id === id);
-  if (item) {
-    item.status = selected ? "selected" : "cancelled";
+  const item = items[index];
+  if (item?.type === "approval" || item?.type === "question") {
+    items[index] = { ...item, status: selected ? "selected" : "cancelled" };
+    return index;
   }
+  return undefined;
 }
 
-export function applySessionUpdate(items: ChatItem[], update: SessionUpdate): void {
+export function applySessionUpdate(items: ChatItem[], update: SessionUpdate): number | undefined {
   switch (update.sessionUpdate) {
     case "user_message_chunk":
-      appendChunk(items, "user", contentText(update.content));
-      return;
+      return appendChunk(items, "user", contentText(update.content));
     case "agent_message_chunk":
-      appendChunk(items, "assistant", contentText(update.content));
-      return;
+      return appendChunk(items, "assistant", contentText(update.content));
     case "agent_thought_chunk":
-      appendChunk(items, "thought", contentText(update.content));
-      return;
+      return appendChunk(items, "thought", contentText(update.content));
     case "tool_call": {
-      const existing = items.find((item): item is Extract<ChatItem, { type: "tool" }> => item.type === "tool" && item.id === update.toolCallId);
-      if (existing) {
-        existing.title = update.title ?? existing.title;
-        existing.kind = update.kind ?? existing.kind;
-        existing.status = update.status ?? existing.status;
-        existing.rawInput = update.rawInput ?? existing.rawInput;
-        if (update.preview !== undefined) {
-          existing.preview = update.preview;
-        }
-        if (update.locations !== undefined) {
-          existing.locations = update.locations;
-        }
-        return;
+      const index = items.findIndex((item) => item.type === "tool" && item.id === update.toolCallId);
+      const existing = items[index];
+      if (existing?.type === "tool") {
+        items[index] = {
+          ...existing,
+          title: update.title ?? existing.title,
+          kind: update.kind ?? existing.kind,
+          status: update.status ?? existing.status,
+          rawInput: update.rawInput ?? existing.rawInput,
+          ...(update.preview !== undefined ? { preview: update.preview } : {}),
+          ...(update.locations !== undefined ? { locations: update.locations } : {}),
+        };
+        return index;
       }
       const toolItem: Extract<ChatItem, { type: "tool" }> = {
         type: "tool",
@@ -125,44 +124,43 @@ export function applySessionUpdate(items: ChatItem[], update: SessionUpdate): vo
       if (update.preview !== undefined) {
         toolItem.preview = update.preview;
       }
-      items.push(toolItem);
-      return;
+      return items.push(toolItem) - 1;
     }
     case "tool_call_update": {
       const text = update.content?.map((part) => contentText(part.content)).join("\n") ?? "";
-      const existing = items.find((item): item is Extract<ChatItem, { type: "tool" }> => item.type === "tool" && item.id === update.toolCallId);
-      if (existing) {
-        existing.status = update.status ?? existing.status;
-        existing.content = text;
-        return;
+      const index = items.findIndex((item) => item.type === "tool" && item.id === update.toolCallId);
+      const existing = items[index];
+      if (existing?.type === "tool") {
+        items[index] = { ...existing, status: update.status ?? existing.status, content: text };
+        return index;
       }
-      items.push({
+      return items.push({
         type: "tool",
         id: update.toolCallId,
         title: update.toolCallId,
         kind: "other",
         status: update.status ?? "completed",
         content: text,
-      });
-      return;
+      }) - 1;
     }
     case "usage": {
       const last = items.at(-1);
       if (last?.type === "usage") {
-        last.usage = update.usage;
-        return;
+        const index = items.length - 1;
+        items[index] = { ...last, usage: update.usage };
+        return index;
       }
-      items.push({ type: "usage", usage: update.usage });
-      return;
+      return items.push({ type: "usage", usage: update.usage }) - 1;
     }
     case "plan": {
-      const existing = items.find((item): item is Extract<ChatItem, { type: "plan" }> => item.type === "plan");
-      if (existing) {
-        existing.entries = update.entries;
+      const index = items.findIndex((item) => item.type === "plan");
+      const existing = items[index];
+      if (existing?.type === "plan") {
+        items[index] = { ...existing, entries: update.entries };
+        return index;
       } else {
-        items.push({ type: "plan", entries: update.entries });
+        return items.push({ type: "plan", entries: update.entries }) - 1;
       }
-      return;
     }
     case "available_commands_update":
     case "config_option_update":
@@ -173,16 +171,17 @@ export function applySessionUpdate(items: ChatItem[], update: SessionUpdate): vo
   }
 }
 
-function appendChunk(items: ChatItem[], role: "user" | "assistant" | "thought", text: string): void {
+function appendChunk(items: ChatItem[], role: "user" | "assistant" | "thought", text: string): number | undefined {
   if (text === "") {
     return;
   }
   const last = items.at(-1);
   if (last?.type === "message" && last.role === role) {
-    last.text += text;
-    return;
+    const index = items.length - 1;
+    items[index] = { ...last, text: last.text + text };
+    return index;
   }
-  items.push({ type: "message", role, text });
+  return items.push({ type: "message", role, text }) - 1;
 }
 
 export function isQuestionRequest(params: PermissionRequestParams): boolean {

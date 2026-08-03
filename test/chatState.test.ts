@@ -4,10 +4,12 @@ import { appendApproval, applySessionUpdate, resolveApproval, type ChatItem } fr
 
 test("applySessionUpdate appends streamed assistant chunks", () => {
   const items: ChatItem[] = [];
-  applySessionUpdate(items, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hel" } });
-  applySessionUpdate(items, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" } });
+  assert.equal(applySessionUpdate(items, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hel" } }), 0);
+  const firstItem = items[0];
+  assert.equal(applySessionUpdate(items, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" } }), 0);
 
   assert.deepEqual(items, [{ type: "message", role: "assistant", text: "hello" }]);
+  assert.notEqual(items[0], firstItem, "streaming updates replace the changed item so incremental sync can detect it");
 });
 
 test("applySessionUpdate tracks tool lifecycle", () => {
