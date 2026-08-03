@@ -746,7 +746,7 @@ button.secondary {
   border: 1px solid var(--vscode-dropdown-border, var(--vscode-sideBar-border));
   border-radius: 7px;
   background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 8px 22px var(--rx-shadow);
 }
 
 .session-popover {
@@ -810,7 +810,7 @@ button:disabled {
   min-height: 34px;
   padding: 0 10px;
   color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--rx-panel) 82%, rgba(255, 255, 255, 0.025));
+  background: var(--rx-subtle);
   border: 1px solid var(--rx-border);
   border-radius: 6px;
   font-size: 12px;
@@ -899,7 +899,7 @@ button:disabled {
 
 .runtime-effort-button {
   min-width: 62px;
-  color: color-mix(in srgb, var(--rx-orange) 86%, var(--vscode-foreground));
+  color: var(--rx-orange-foreground);
 }
 
 #runtimeSettingsButton,
@@ -1049,7 +1049,7 @@ button:disabled {
   place-items: center;
   width: 72px;
   height: 72px;
-  color: #0153e5;
+  color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
   border-radius: 20px;
   font-size: 36px;
@@ -1275,13 +1275,19 @@ textarea:not(:placeholder-shown) + .composer-hint {
 }
 
 :root {
-  --rx-bg: color-mix(in srgb, var(--vscode-sideBar-background) 88%, #05070b);
-  --rx-panel: color-mix(in srgb, var(--vscode-sideBar-background) 82%, #101217);
-  --rx-border: color-mix(in srgb, var(--vscode-sideBar-border) 76%, #3d414b);
+  --rx-bg: var(--vscode-sideBar-background);
+  --rx-panel: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--vscode-descriptionForeground));
+  --rx-border: color-mix(in srgb, var(--vscode-descriptionForeground) 24%, transparent);
+  --rx-subtle: color-mix(in srgb, var(--vscode-descriptionForeground) 6%, transparent);
+  --rx-shadow: var(--vscode-widget-shadow);
+  --rx-on-accent: #111318;
   --rx-orange: #ff7a3d;
   --rx-orange-strong: #ff8a4c;
   --rx-blue: #2f6df6;
   --rx-green: #11a979;
+  --rx-orange-foreground: color-mix(in srgb, var(--vscode-foreground) 90%, var(--rx-orange));
+  --rx-blue-foreground: color-mix(in srgb, var(--vscode-foreground) 90%, var(--rx-blue));
+  --rx-green-foreground: color-mix(in srgb, var(--vscode-foreground) 90%, var(--rx-green));
 }
 
 body {
@@ -1296,7 +1302,7 @@ body {
 
 .topbar {
   gap: 8px;
-  background: color-mix(in srgb, var(--rx-bg) 92%, #14171d);
+  background: var(--rx-bg);
   border-bottom-color: var(--rx-border);
 }
 
@@ -1321,7 +1327,7 @@ body {
 
 .primary-button {
   background: var(--rx-orange);
-  color: #111318;
+  color: var(--rx-on-accent);
   font-weight: 700;
 }
 
@@ -1345,14 +1351,14 @@ pre {
 }
 
 .reasonix-mark {
-  color: #0153e5;
-  background: linear-gradient(180deg, #21242b, #15171d);
-  border: 1px solid color-mix(in srgb, #0153e5 36%, var(--rx-border));
-  box-shadow: inset 0 0 0 1px rgba(1, 83, 229, 0.16), 0 18px 42px rgba(0, 0, 0, 0.25);
+  color: var(--vscode-foreground);
+  background: transparent;
+  border: 1px solid var(--rx-border);
+  box-shadow: none;
 }
 
 .empty-title {
-  color: color-mix(in srgb, var(--vscode-foreground) 92%, #ffffff);
+  color: var(--vscode-foreground);
 }
 
 .empty-state {
@@ -1375,7 +1381,7 @@ pre {
 .composer {
   min-width: 0;
   border-top-color: var(--rx-border);
-  background: color-mix(in srgb, var(--rx-bg) 94%, #14171d);
+  background: var(--rx-bg);
 }
 
 .input-wrap {
@@ -1391,7 +1397,7 @@ pre {
   left: 12px;
   top: 17px;
   z-index: 1;
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   font-size: 16px;
   font-weight: 800;
 }
@@ -1409,7 +1415,7 @@ textarea:focus {
 }
 
 .send-button {
-  color: #111318;
+  color: var(--rx-on-accent);
   background: var(--rx-orange);
   box-shadow: 0 8px 18px rgba(255, 122, 61, 0.24);
 }
@@ -1434,7 +1440,7 @@ textarea:focus {
 
 .settings-tabs {
   border-bottom-color: var(--rx-border);
-  background: color-mix(in srgb, var(--rx-bg) 94%, #111318);
+  background: var(--rx-bg);
 }
 
 .setting-input-row input,
@@ -1444,7 +1450,7 @@ textarea:focus {
 }
 
 .segmented button.selected {
-  color: #111318;
+  color: var(--rx-on-accent);
   background: var(--rx-orange);
   font-weight: 750;
 }
@@ -1492,7 +1498,7 @@ textarea:focus {
   border: 1px solid var(--rx-border);
   border-radius: 999px;
   color: var(--vscode-foreground);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--rx-subtle);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
@@ -1524,7 +1530,7 @@ textarea:focus {
 .composer-mode-chip__icon--dismiss {
   position: absolute;
   left: 8px;
-  color: #fff;
+  color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-descriptionForeground) 64%, transparent);
   opacity: 0;
   transform: scale(0.86);
@@ -1565,7 +1571,7 @@ textarea:focus {
   min-width: 72px;
   max-width: 72px;
   border-color: color-mix(in srgb, var(--rx-orange) 50%, var(--rx-border));
-  color: color-mix(in srgb, var(--rx-orange) 86%, white);
+  color: var(--rx-orange-foreground);
 }
 
 .composer-mode-chip--goal {
@@ -1573,7 +1579,7 @@ textarea:focus {
   min-width: 72px;
   max-width: 72px;
   border-color: color-mix(in srgb, var(--rx-blue) 56%, var(--rx-border));
-  color: #dfe8ff;
+  color: var(--rx-blue-foreground);
 }
 
 .composer-mode-chip--token {
@@ -1583,18 +1589,18 @@ textarea:focus {
   gap: 4px;
   padding: 0 8px 0 7px;
   border-color: color-mix(in srgb, var(--rx-green) 55%, var(--rx-border));
-  color: #b9f2dd;
+  color: var(--rx-green-foreground);
   background: color-mix(in srgb, var(--rx-green) 18%, transparent);
 }
 
 .composer-mode-chip--token .composer-mode-chip__icon--mode {
-  color: var(--rx-green);
+  color: var(--rx-green-foreground);
 }
 
 .approval-menu {
-  --approval-menu-active-bg: color-mix(in srgb, var(--rx-blue) 26%, rgba(255, 255, 255, 0.035));
+  --approval-menu-active-bg: color-mix(in srgb, var(--rx-blue) 26%, var(--rx-subtle));
   --approval-menu-active-border: color-mix(in srgb, var(--rx-blue) 42%, var(--rx-border));
-  --approval-menu-active-fg: color-mix(in srgb, var(--vscode-foreground) 88%, #dfe8ff);
+  --approval-menu-active-fg: var(--rx-blue-foreground);
   display: grid;
   gap: 4px;
   width: 100%;
@@ -1602,19 +1608,19 @@ textarea:focus {
   padding: 4px;
   border: 1px solid var(--rx-border);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--rx-subtle);
 }
 
 .approval-menu[data-mode="auto"] {
-  --approval-menu-active-bg: color-mix(in srgb, var(--rx-green) 28%, rgba(255, 255, 255, 0.035));
+  --approval-menu-active-bg: color-mix(in srgb, var(--rx-green) 28%, var(--rx-subtle));
   --approval-menu-active-border: color-mix(in srgb, var(--rx-green) 42%, var(--rx-border));
-  --approval-menu-active-fg: color-mix(in srgb, var(--vscode-foreground) 86%, #b9f2dd);
+  --approval-menu-active-fg: var(--rx-green-foreground);
 }
 
 .approval-menu[data-mode="yolo"] {
-  --approval-menu-active-bg: color-mix(in srgb, var(--rx-orange) 32%, rgba(255, 255, 255, 0.035));
+  --approval-menu-active-bg: color-mix(in srgb, var(--rx-orange) 32%, var(--rx-subtle));
   --approval-menu-active-border: color-mix(in srgb, var(--rx-orange) 46%, var(--rx-border));
-  --approval-menu-active-fg: color-mix(in srgb, var(--vscode-foreground) 86%, #ffd5bd);
+  --approval-menu-active-fg: var(--rx-orange-foreground);
 }
 
 .approval-menu__item {
@@ -1644,7 +1650,7 @@ textarea:focus {
   color: var(--approval-menu-active-fg);
   background: var(--approval-menu-active-bg);
   border-color: var(--approval-menu-active-border);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 1px 0 var(--rx-subtle);
 }
 
 .approval-menu__item--active:hover,
@@ -1671,7 +1677,7 @@ textarea:focus {
 
 .approval-menu__item--active .approval-menu__check {
   color: var(--approval-menu-active-fg);
-  background: color-mix(in srgb, var(--approval-menu-active-border) 26%, rgba(255, 255, 255, 0.04));
+  background: color-mix(in srgb, var(--approval-menu-active-border) 26%, var(--rx-subtle));
   border-color: color-mix(in srgb, var(--approval-menu-active-border) 62%, transparent);
   opacity: 1;
 }
@@ -1717,8 +1723,8 @@ textarea:focus {
   padding: 7px;
   border: 1px solid var(--rx-border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--rx-panel) 92%, #17191f);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  background: var(--rx-panel);
+  box-shadow: 0 14px 34px var(--rx-shadow);
 }
 
 .collaboration-menu[hidden] {
@@ -2045,7 +2051,7 @@ textarea:focus {
   padding: 12px;
   transform: translateX(-50%);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--rx-panel) 92%, #17191f);
+  background: var(--rx-panel);
 }
 
 .controls-menu[hidden] {
@@ -2077,8 +2083,8 @@ textarea:focus {
   padding: 8px;
   border: 1px solid var(--rx-border);
   border-radius: 9px;
-  background: color-mix(in srgb, var(--rx-panel) 96%, #111318);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
+  background: var(--rx-panel);
+  box-shadow: 0 14px 32px var(--rx-shadow);
 }
 
 .suggestion-menu[hidden] {
@@ -2121,7 +2127,7 @@ textarea:focus {
   place-items: center;
   width: 24px;
   height: 24px;
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   background: color-mix(in srgb, var(--rx-orange) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--rx-orange) 28%, transparent);
   border-radius: 6px;
@@ -2158,7 +2164,7 @@ textarea:focus {
   overflow: hidden;
   padding: 2px 6px;
   color: var(--vscode-descriptionForeground);
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--rx-subtle);
   border: 1px solid var(--rx-border);
   border-radius: 999px;
   font-size: 10px;
@@ -2368,7 +2374,7 @@ textarea:focus {
 }
 
 .connection-notice__action--primary {
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   font-weight: 650;
 }
 
@@ -2425,10 +2431,10 @@ textarea:focus {
     width: 100%;
     min-height: 38px;
     padding: 0 11px;
-    color: #111318;
+    color: var(--rx-on-accent);
     text-align: left;
     background: var(--rx-orange);
-    border: 1px solid color-mix(in srgb, var(--rx-orange) 76%, white);
+    border: 1px solid color-mix(in srgb, var(--rx-orange) 76%, var(--vscode-foreground));
     border-radius: 6px;
     font-weight: 750;
     cursor: pointer;
@@ -2581,7 +2587,7 @@ textarea:focus {
   scrollbar-width: none;
   border: 1px solid var(--rx-border);
   border-radius: 0 0 8px 8px;
-  background: color-mix(in srgb, var(--rx-panel) 88%, #111318);
+  background: var(--rx-panel);
 }
 
 .collaboration-control,
@@ -2599,17 +2605,17 @@ textarea:focus {
 }
 
 .approval-summary[data-mode="ask"] {
-  color: color-mix(in srgb, var(--rx-blue) 72%, var(--vscode-foreground));
+  color: var(--rx-blue-foreground);
   border-color: color-mix(in srgb, var(--rx-blue) 42%, var(--rx-border));
 }
 
 .approval-summary[data-mode="auto"] {
-  color: #b9f2dd;
+  color: var(--rx-green-foreground);
   border-color: color-mix(in srgb, var(--rx-green) 42%, var(--rx-border));
 }
 
 .approval-summary[data-mode="yolo"] {
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   border-color: color-mix(in srgb, var(--rx-orange) 52%, var(--rx-border));
 }
 
@@ -2623,7 +2629,7 @@ textarea:focus {
   padding: 8px;
   transform: none;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--rx-panel) 94%, #17191f);
+  background: var(--rx-panel);
 }
 
 .controls-menu .approval-menu {
@@ -2640,7 +2646,7 @@ textarea:focus {
 }
 
 .controls-menu .approval-menu__item[data-tool-approval-mode="yolo"] .approval-menu__label {
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
 }
 
 .runtime-control {
@@ -2660,12 +2666,12 @@ textarea:focus {
 }
 
 .work-mode-button[data-mode="economy"] {
-  color: #b9f2dd;
+  color: var(--rx-green-foreground);
   border-color: color-mix(in srgb, var(--rx-green) 42%, var(--rx-border));
 }
 
 .work-mode-button[data-mode="delivery"] {
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   border-color: color-mix(in srgb, var(--rx-orange) 48%, var(--rx-border));
 }
 
@@ -2690,7 +2696,7 @@ textarea:focus {
   place-items: center;
   width: 18px;
   height: 18px;
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
   font-size: 14px;
   font-weight: 800;
 }
@@ -2715,7 +2721,7 @@ textarea:focus {
   padding: 8px;
   transform: none;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--rx-panel) 94%, #17191f);
+  background: var(--rx-panel);
 }
 
 .runtime-option-menu[hidden] {
@@ -2870,7 +2876,7 @@ textarea:focus {
   padding: 0 6px 0 9px;
   border: 1px solid var(--rx-border);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--rx-subtle);
   color: var(--vscode-foreground);
   font-size: 12px;
   font-weight: 600;
@@ -2882,11 +2888,11 @@ textarea:focus {
 }
 
 .attachment-chip--session .attachment-chip__icon {
-  color: var(--rx-blue);
+  color: var(--rx-blue-foreground);
 }
 
 .attachment-chip--image .attachment-chip__icon {
-  color: var(--rx-orange);
+  color: var(--rx-orange-foreground);
 }
 
 .attachment-chip__name {
