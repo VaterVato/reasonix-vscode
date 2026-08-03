@@ -9,23 +9,24 @@ export async function run(): Promise<void> {
   const fakeAcp = process.env.REASONIX_FAKE_ACP;
   const fakeLog = process.env.REASONIX_FAKE_LOG;
   const workspacePath = process.env.REASONIX_TEST_WORKSPACE;
+  const binaryMode = process.env.REASONIX_TEST_BINARY_MODE;
   assert.ok(fakeAcp);
   assert.ok(fakeLog);
   assert.ok(workspacePath);
 
   const folder = await waitForWorkspace();
-  assert.equal(path.resolve(folder.uri.fsPath), path.resolve(workspacePath));
+  assert.equal(comparablePath(folder.uri.fsPath), comparablePath(workspacePath));
 
   const extension = vscode.extensions.getExtension("SivanLiu.reasonix-agent");
   assert.ok(extension);
   await extension.activate();
   await waitForCommand("reasonix.newSession");
 
-  await vscode.workspace.getConfiguration("reasonix").update("binaryPath", fakeAcp, vscode.ConfigurationTarget.Workspace);
+  await vscode.workspace.getConfiguration("reasonix").update("binaryPath", binaryMode === "path" ? "" : fakeAcp, vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.getConfiguration("reasonix").update("model", "fake/default", vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.getConfiguration("reasonix").update("trace", false, vscode.ConfigurationTarget.Workspace);
   await vscode.workspace.getConfiguration("reasonix").update("includeSelectionMode", "off", vscode.ConfigurationTarget.Workspace);
-  await waitForConfig("binaryPath", fakeAcp);
+  await waitForConfig("binaryPath", binaryMode === "path" ? "" : fakeAcp);
   await waitForConfig("model", "fake/default");
   await waitForConfig("includeSelectionMode", "off");
 
@@ -195,6 +196,11 @@ export async function run(): Promise<void> {
   await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "disconnect_probe" });
   await waitForLog(fakeLog, "process/disconnect-probe");
   await waitForLog(fakeLog, "session/resume");
+}
+
+function comparablePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 async function waitForCommand(command: string): Promise<void> {

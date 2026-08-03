@@ -28,6 +28,7 @@ import { attachmentToBlock, isImageMime, mimeFromFileName, MAX_ATTACHMENTS, type
 import { buildEditorContextBlock, configuredSelectionMode, type IncludeSelectionMode } from "./editorContext";
 import { WorkspaceFileBridge } from "./fileBridge";
 import { DiffPreviewProvider } from "./preview";
+import { normalizeReasonixPath, selectReasonixPath } from "./reasonixLauncher";
 import { buildPromptBlocks } from "./resourceMentions";
 import { suggestWorkspaceResources } from "./resourceSuggestions";
 import { redactLocalPaths } from "./sanitize";
@@ -2202,14 +2203,14 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 async function resolveReasonixBinary(): Promise<string | undefined> {
   const configured = vscode.workspace.getConfiguration("reasonix").get<string>("binaryPath", "").trim();
   if (configured !== "") {
-    return configured;
+    return await normalizeReasonixPath(configured);
   }
   const command = process.platform === "win32" ? "where" : "which";
   try {
     const { stdout } = await execFileAsync(command, ["reasonix"]);
-    const resolved = stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    const resolved = selectReasonixPath(stdout);
     if (resolved) {
-      return resolved;
+      return await normalizeReasonixPath(resolved);
     }
   } catch {
     // Fall through to the user-facing install prompt.
@@ -2244,7 +2245,7 @@ async function selectReasonixBinary(): Promise<string | undefined> {
     return undefined;
   }
   await vscode.workspace.getConfiguration("reasonix").update("binaryPath", selected, vscode.ConfigurationTarget.Global);
-  return selected;
+  return await normalizeReasonixPath(selected);
 }
 
 function workspaceKey(folder: vscode.WorkspaceFolder): string {

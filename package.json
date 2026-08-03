@@ -232,10 +232,14 @@
     "package": "vsce package",
     "vscode:prepublish": "npm run compile"
   },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.92.0",
-    "@vscode/test-electron": "^2.4.1",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.28.0",
     "typescript": "^5.7.2"

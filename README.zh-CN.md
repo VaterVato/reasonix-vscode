@@ -110,6 +110,7 @@ Reasonix for VS Code 保持很窄的宿主边界：
 ### 找不到 Reasonix CLI
 
 使用 `npm i -g reasonix` 安装 Reasonix，确认它在 `PATH` 中，或设置 `reasonix.binaryPath`。
+在 Windows 上，扩展支持 npm 生成的 `reasonix.cmd` 启动器，会在可用时解析到包内原生可执行文件，并会优先选择可运行入口而不是 `where reasonix` 返回的无扩展名 shell shim；`reasonix.binaryPath` 指向这两个同名入口中的任意一个都可以。
 
 ### Chat view 显示 disconnected
 
@@ -155,6 +156,7 @@ npm run package
 ```
 
 `npm run test:vscode` 使用 `@vscode/test-electron` 和 main-v2 形状的 fake ACP server，在不发起真实模型调用的前提下验证独立的执行/工作/权限轴、缓存稳定的原生 profile 切换、早到命令更新、原生 session、resource block、未保存缓冲区读取、受控写入、VS Code 终端、计划、工具位置、Ask、取消和断线恢复。
+追加 `-- --path` 可以改为验证 PATH 自动解析，而不是显式配置 fake CLI 路径；Windows CI 会同时运行这两种模式。
 
 `npm run smoke:acp` 会启动真实 `reasonix acp` 后端，检查 capability、会话状态、列表、模式切换、关闭与清理，不发送 prompt，也不会调用真实模型。可以用 `REASONIX_BINARY=/absolute/path/to/reasonix` 指定 CLI；如果希望找不到 `reasonix` 时直接失败，设置 `REASONIX_ACP_SMOKE_REQUIRED=1`。
 

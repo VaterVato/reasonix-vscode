@@ -342,7 +342,7 @@ function handlePrompt(message) {
     return;
   }
   if (text.includes("terminal_probe")) {
-    request("terminal/create", { sessionId, command: "printf reasonix-terminal", outputByteLimit: 8192 }, { type: "terminal-create", promptRequestId: message.id });
+    request("terminal/create", { sessionId, command: "echo reasonix-terminal", outputByteLimit: 8192 }, { type: "terminal-create", promptRequestId: message.id });
     return;
   }
   if (text.includes("plan_probe")) {

@@ -110,6 +110,7 @@ Approval options map to Reasonix permission outcomes:
 ### Reasonix CLI was not found
 
 Install Reasonix with `npm i -g reasonix`, make sure it is on `PATH`, or set `reasonix.binaryPath`.
+On Windows, the extension supports npm's `reasonix.cmd` launcher, resolves its packaged native executable when available, and automatically prefers runnable entries over the extensionless shell shim returned by `where reasonix`; pointing `reasonix.binaryPath` at either sibling is supported.
 
 ### The chat view says disconnected
 
@@ -155,6 +156,7 @@ npm run package
 ```
 
 `npm run test:vscode` uses `@vscode/test-electron` with a main-v2-shaped fake ACP server. It verifies independent execution/work/approval axes, cache-stable native profile switching, early command updates, native sessions, resource blocks, unsaved-buffer reads, guarded writes, VS Code terminals, plans, tool locations, Ask handling, cancellation, and reconnect/resume without a model call.
+Pass `-- --path` to exercise automatic PATH resolution instead of an explicitly configured fake CLI path; Windows CI runs both modes.
 
 `npm run smoke:acp` starts the real `reasonix acp` backend and checks capabilities, session state, list, mode switching, close, and cleanup without sending a prompt or invoking a model. Set `REASONIX_BINARY=/absolute/path/to/reasonix` to test a specific CLI. Set `REASONIX_ACP_SMOKE_REQUIRED=1` if missing `reasonix` should fail instead of skip.
 
