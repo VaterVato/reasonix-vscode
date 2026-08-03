@@ -6,6 +6,7 @@
 - Fixed long chat sessions freezing the VS Code renderer by removing selection-change snapshot floods, coalescing Host updates, sending revisioned transcript splices instead of the full history for every ACP chunk, bounding the rendered transcript window, and persisting only lightweight Webview UI state.
 - Fixed Windows ACP startup for npm-installed Reasonix CLIs by preferring the packaged native executable, resolving `.cmd` and explicitly configured extensionless shims, and safely launching custom command wrappers when no native binary is available.
 - Updated the chat Webview to follow VS Code theme colors across light and dark themes instead of mixing fixed dark surfaces and highlights into the active theme.
+- Prevented malformed or extended Markdown fences from entering a non-progress render loop and freezing the Webview.
 
 ## 0.3.0
 

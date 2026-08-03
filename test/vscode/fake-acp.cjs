@@ -296,6 +296,31 @@ function handlePrompt(message) {
     log({ method: "process/disconnect-probe" });
     process.exit(23);
   }
+  if (text.includes("long_webview_probe")) {
+    const payload = "x".repeat(1_560);
+    for (let index = 0; index < 205; index += 1) {
+      notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: index % 2 === 0 ? "agent_message_chunk" : "agent_thought_chunk",
+          content: { type: "text", text: `history-${index} ${payload}` },
+        },
+      });
+    }
+    notify("session/update", {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "```c# title=demo\nlong-history-tail\n```" },
+      },
+    });
+    log({ method: "webview/long-history-sent", itemCount: 206 });
+    result(message.id, { stopReason: "end_turn" });
+    return;
+  }
+  if (text.includes("post_history_probe")) {
+    log({ method: "webview/post-history-prompt" });
+  }
   if (text.includes("permission_probe")) {
     const toolCallId = "fake-permission-tool";
     notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId, title: "write_file", kind: "edit", status: "pending", rawInput: { path: "sample.ts" }, locations: [{ path: message.params?.cwd || "sample.ts", line: 1 }] } });

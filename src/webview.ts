@@ -3,6 +3,7 @@ import { MAX_ATTACHMENTS, type PendingAttachment } from "./attachments";
 import type { ChatItem } from "./chatState";
 import { getComposerTrigger, replaceComposerTrigger, slashSuggestions, type ComposerTrigger } from "./composerSuggestions";
 import { shouldSubmitPromptOnKeydown } from "./keyboard";
+import { parseMarkdownBlocks } from "./markdown";
 import type { ResourceSuggestion } from "./resourceSuggestions";
 import { applyTranscriptSplice, transcriptWindowStart, type TranscriptSplice } from "./snapshotSync";
 import type { HostToWebviewMessage } from "./webviewProtocol";
@@ -2354,80 +2355,34 @@ function detailsBlock(summaryText: string, text: string): HTMLElement {
 function renderMarkdown(text: string): HTMLElement {
   const root = document.createElement("div");
   root.className = "markdown";
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    if (line.trim() === "") {
-      i += 1;
-      continue;
-    }
-
-    const fence = line.match(/^```([\w.+-]*)\s*$/);
-    if (fence) {
-      const language = fence[1] ?? "";
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? "")) {
-        code.push(lines[i] ?? "");
-        i += 1;
-      }
-      if (i < lines.length) {
-        i += 1;
-      }
-      root.append(codeBlock(code.join("\n"), language));
-      continue;
-    }
-
-    if (/^\s*[-*]\s+/.test(line)) {
+  for (const block of parseMarkdownBlocks(text)) {
+    if (block.kind === "code") {
+      root.append(codeBlock(block.text, block.language));
+    } else if (block.kind === "unorderedList") {
       const list = document.createElement("ul");
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i] ?? "")) {
+      for (const text of block.items) {
         const item = document.createElement("li");
-        appendInline(item, (lines[i] ?? "").replace(/^\s*[-*]\s+/, ""));
+        appendInline(item, text);
         list.append(item);
-        i += 1;
       }
       root.append(list);
-      continue;
-    }
-
-    if (/^\s*\d+\.\s+/.test(line)) {
+    } else if (block.kind === "orderedList") {
       const list = document.createElement("ol");
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i] ?? "")) {
+      for (const text of block.items) {
         const item = document.createElement("li");
-        appendInline(item, (lines[i] ?? "").replace(/^\s*\d+\.\s+/, ""));
+        appendInline(item, text);
         list.append(item);
-        i += 1;
       }
       root.append(list);
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      const level = heading[1]?.length ?? 2;
-      const h = document.createElement(`h${level + 2}`) as HTMLHeadingElement;
-      appendInline(h, heading[2] ?? "");
+    } else if (block.kind === "heading") {
+      const h = document.createElement(`h${block.level + 2}`) as HTMLHeadingElement;
+      appendInline(h, block.text);
       root.append(h);
-      i += 1;
-      continue;
+    } else {
+      const p = document.createElement("p");
+      appendInline(p, block.text);
+      root.append(p);
     }
-
-    const paragraph: string[] = [];
-    while (
-      i < lines.length &&
-      (lines[i] ?? "").trim() !== "" &&
-      !/^```/.test(lines[i] ?? "") &&
-      !/^\s*[-*]\s+/.test(lines[i] ?? "") &&
-      !/^\s*\d+\.\s+/.test(lines[i] ?? "") &&
-      !/^(#{1,3})\s+/.test(lines[i] ?? "")
-    ) {
-      paragraph.push(lines[i] ?? "");
-      i += 1;
-    }
-    const p = document.createElement("p");
-    appendInline(p, paragraph.join("\n"));
-    root.append(p);
   }
   return root;
 }
