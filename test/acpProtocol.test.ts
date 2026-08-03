@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import {
   parseFSReadTextFileParams,
   parsePermissionRequestParams,
+  parseReasonixSessionStatus,
+  parseReasonixStatusUpdateParams,
   parseSessionUpdateParams,
   parseTerminalCreateParams,
+  REASONIX_STATUS_METHOD,
+  REASONIX_STATUS_UPDATE_METHOD,
+  supportsReasonixStatusMethod,
+  usageDataFromReasonixStatus,
 } from "../src/acpProtocol";
 
 test("parseSessionUpdateParams accepts main-v2 command, plan, and location updates", () => {
@@ -37,6 +43,24 @@ test("parseSessionUpdateParams rejects unknown or malformed frames without throw
   assert.equal(malformed.ok, false);
 });
 
+test("parseSessionUpdateParams keeps legacy Reasonix usage updates compatible", () => {
+  assert.equal(parseSessionUpdateParams({
+    sessionId: "s1",
+    update: {
+      sessionUpdate: "usage",
+      usage: {
+        promptTokens: 100,
+        completionTokens: 25,
+        totalTokens: 125,
+        cacheHitTokens: 80,
+        cacheMissTokens: 20,
+        sessionCacheHitTokens: 180,
+        sessionCacheMissTokens: 20,
+      },
+    },
+  }).ok, true);
+});
+
 test("ACP client request parsers enforce required fields", () => {
   assert.equal(parseFSReadTextFileParams({ sessionId: "s1", path: "README.md", line: 1, limit: 20 }).ok, true);
   assert.equal(parseFSReadTextFileParams({ sessionId: "s1", path: "README.md", line: 0 }).ok, false);
@@ -48,3 +72,83 @@ test("ACP client request parsers enforce required fields", () => {
     options: [{ optionId: "q:1", name: "One", kind: "allow_once" }],
   }).ok, true);
 });
+
+test("Reasonix status capability and current schema expose usage telemetry", () => {
+  const capabilities = {
+    _meta: {
+      [REASONIX_STATUS_METHOD]: { schemaVersion: 1 },
+      [REASONIX_STATUS_UPDATE_METHOD]: { schemaVersion: 1 },
+    },
+  };
+  assert.equal(supportsReasonixStatusMethod(capabilities, REASONIX_STATUS_METHOD), true);
+  assert.equal(supportsReasonixStatusMethod(capabilities, REASONIX_STATUS_UPDATE_METHOD), true);
+  assert.equal(supportsReasonixStatusMethod({ _meta: { [REASONIX_STATUS_METHOD]: { schemaVersion: 2 } } }, REASONIX_STATUS_METHOD), false);
+
+  const status = reasonixStatus(7, 120, 30, 80, 40, 180, 60);
+  const parsed = parseReasonixSessionStatus(status);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.ok ? usageDataFromReasonixStatus(parsed.value) : undefined, {
+    promptTokens: 120,
+    completionTokens: 30,
+    totalTokens: 150,
+    cacheHitTokens: 80,
+    cacheMissTokens: 40,
+    reasoningTokens: 12,
+    sessionCacheHitTokens: 180,
+    sessionCacheMissTokens: 60,
+    cost: 0.0042,
+    currency: "USD",
+  });
+
+  assert.equal(parseReasonixStatusUpdateParams({
+    schemaVersion: 1,
+    sequence: 7,
+    sessionId: "s1",
+    event: "usage",
+    status,
+  }).ok, true);
+});
+
+test("Reasonix status parser rejects malformed and mismatched snapshots", () => {
+  const status = reasonixStatus(7, 120, 30, 80, 40, 180, 60);
+  assert.equal(parseReasonixSessionStatus({ ...status, usage: { ...status.usage, turn: { ...status.usage.turn, promptTokens: -1 } } }).ok, false);
+  assert.equal(parseReasonixStatusUpdateParams({
+    schemaVersion: 1,
+    sequence: 8,
+    sessionId: "s1",
+    event: "usage",
+    status,
+  }).ok, false);
+});
+
+function reasonixStatus(
+  sequence: number,
+  promptTokens: number,
+  completionTokens: number,
+  cacheHitTokens: number,
+  cacheMissTokens: number,
+  sessionCacheHitTokens: number,
+  sessionCacheMissTokens: number,
+) {
+  const usage = (prompt: number, completion: number, hit: number, miss: number, cost: number | null) => ({
+    promptTokens: prompt,
+    completionTokens: completion,
+    reasoningTokens: 12,
+    cacheHitTokens: hit,
+    cacheMissTokens: miss,
+    estimated: false,
+    cacheHitRatio: hit + miss > 0 ? hit / (hit + miss) : null,
+    estimatedCost: cost,
+    currency: cost === null ? null : "USD",
+    usageSource: "executor",
+  });
+  return {
+    schemaVersion: 1,
+    sequence,
+    sessionId: "s1",
+    usage: {
+      turn: usage(promptTokens, completionTokens, cacheHitTokens, cacheMissTokens, 0.0042),
+      cumulative: usage(promptTokens, completionTokens, sessionCacheHitTokens, sessionCacheMissTokens, 0.0042),
+    },
+  };
+}

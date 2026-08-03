@@ -11,6 +11,9 @@ let currentModelId = "fake/default";
 let currentEffort = "medium";
 let currentWorkMode = "balanced";
 let currentApprovalMode = "ask";
+let statusSequence = 0;
+let currentTurnUsage = statusUsage(0, 0, 0, 0, 0, null, null);
+let cumulativeUsage = statusUsage(0, 0, 0, 0, 0, null, null);
 const pendingAgentRequests = new Map();
 const sessions = new Map();
 
@@ -128,6 +131,41 @@ function availableCommands() {
   };
 }
 
+function statusUsage(promptTokens, completionTokens, reasoningTokens, cacheHitTokens, cacheMissTokens, estimatedCost, currency) {
+  return {
+    promptTokens,
+    completionTokens,
+    reasoningTokens,
+    cacheHitTokens,
+    cacheMissTokens,
+    estimated: false,
+    cacheHitRatio: cacheHitTokens + cacheMissTokens > 0 ? cacheHitTokens / (cacheHitTokens + cacheMissTokens) : null,
+    estimatedCost,
+    currency,
+    usageSource: "executor",
+  };
+}
+
+function reasonixStatus(sequence = statusSequence, turn = currentTurnUsage, cumulative = cumulativeUsage) {
+  return {
+    schemaVersion: 1,
+    sequence,
+    sessionId,
+    state: "idle",
+    model: currentModelId,
+    effort: currentEffort,
+    mode: currentModeId,
+    workMode: currentWorkMode,
+    plannerMode: "on",
+    goal: { status: "stopped" },
+    phase: "completed",
+    turnOutcome: { kind: "completed" },
+    finalReadiness: { readyForReview: true, summary: "", risks: [] },
+    sandbox: { mode: "off", engine: "none", available: false, workspaceRoot: process.cwd(), writeRoots: [], networkEnabled: true },
+    usage: { turn, cumulative },
+  };
+}
+
 function handle(message) {
   if (!message.method && pendingAgentRequests.has(message.id)) {
     handleAgentResponse(message, pendingAgentRequests.get(message.id));
@@ -145,6 +183,10 @@ function handle(message) {
           sessionCapabilities: { list: {}, resume: {}, close: {}, delete: {} },
           promptCapabilities: { image: false, audio: false, embeddedContext: true },
           mcpCapabilities: { http: true, sse: false },
+          _meta: {
+            "_reasonix.io/session/status": { schemaVersion: 1 },
+            "_reasonix.io/session/status_update": { schemaVersion: 1 },
+          },
         },
         authMethods: [],
       });
@@ -169,6 +211,9 @@ function handle(message) {
       return;
     case "session/list":
       result(message.id, { sessions: [...sessions.values()] });
+      return;
+    case "_reasonix.io/session/status":
+      result(message.id, reasonixStatus());
       return;
     case "session/close":
       result(message.id, {});
@@ -219,6 +264,28 @@ function handle(message) {
 
 function handlePrompt(message) {
   const text = promptText(message.params);
+  if (text.includes("usage_probe")) {
+    statusSequence = 2;
+    currentTurnUsage = statusUsage(120, 30, 12, 80, 40, 0.0042, "USD");
+    cumulativeUsage = statusUsage(240, 60, 20, 180, 60, 0.0084, "USD");
+    notify("_reasonix.io/session/status_update", {
+      schemaVersion: 1,
+      sequence: statusSequence,
+      sessionId,
+      event: "usage",
+      status: reasonixStatus(),
+    });
+    const staleTurn = statusUsage(999, 999, 999, 1, 1, 99, "USD");
+    notify("_reasonix.io/session/status_update", {
+      schemaVersion: 1,
+      sequence: 1,
+      sessionId,
+      event: "usage",
+      status: reasonixStatus(1, staleTurn, staleTurn),
+    });
+    result(message.id, { stopReason: "end_turn" });
+    return;
+  }
   if (text.includes("slow_prompt")) {
     pendingSlowPromptId = message.id;
     log({ method: "slow/prompt" });

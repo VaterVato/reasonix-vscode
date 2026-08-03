@@ -3,12 +3,19 @@ import type {
   FSReadTextFileParams,
   FSWriteTextFileParams,
   PermissionRequestParams,
+  ReasonixSessionStatus,
+  ReasonixStatusUpdateParams,
   SessionConfigOption,
   SessionUpdate,
   SessionUpdateParams,
   TerminalCreateParams,
   TerminalIDParams,
+  UsageData,
 } from "./acpTypes";
+
+export const REASONIX_STATUS_METHOD = "_reasonix.io/session/status";
+export const REASONIX_STATUS_UPDATE_METHOD = "_reasonix.io/session/status_update";
+const REASONIX_STATUS_SCHEMA_VERSION = 1;
 
 export type ProtocolParseResult<T> =
   | { ok: true; value: T }
@@ -23,6 +30,55 @@ export function parseSessionUpdateParams(value: unknown): ProtocolParseResult<Se
     return update;
   }
   return valid({ sessionId: value.sessionId, update: update.value });
+}
+
+export function supportsReasonixStatusMethod(capabilities: unknown, method: string): boolean {
+  if (!isRecord(capabilities) || !isRecord(capabilities._meta)) {
+    return false;
+  }
+  const advertised = capabilities._meta[method];
+  return isRecord(advertised) && advertised.schemaVersion === REASONIX_STATUS_SCHEMA_VERSION;
+}
+
+export function parseReasonixSessionStatus(value: unknown): ProtocolParseResult<ReasonixSessionStatus> {
+  if (!isRecord(value) || value.schemaVersion !== REASONIX_STATUS_SCHEMA_VERSION
+    || !nonNegativeInteger(value.sequence) || !nonEmptyString(value.sessionId) || !isRecord(value.usage)
+    || !isReasonixStatusUsage(value.usage.turn) || !isReasonixStatusUsage(value.usage.cumulative)) {
+    return invalid("Reasonix session status is malformed");
+  }
+  return valid(value as unknown as ReasonixSessionStatus);
+}
+
+export function parseReasonixStatusUpdateParams(value: unknown): ProtocolParseResult<ReasonixStatusUpdateParams> {
+  if (!isRecord(value) || value.schemaVersion !== REASONIX_STATUS_SCHEMA_VERSION
+    || !nonNegativeInteger(value.sequence) || !nonEmptyString(value.sessionId) || !nonEmptyString(value.event)) {
+    return invalid("Reasonix status update is malformed");
+  }
+  const status = parseReasonixSessionStatus(value.status);
+  if (!status.ok) {
+    return status;
+  }
+  if (status.value.sequence !== value.sequence || status.value.sessionId !== value.sessionId) {
+    return invalid("Reasonix status update does not match its status snapshot");
+  }
+  return valid(value as unknown as ReasonixStatusUpdateParams);
+}
+
+export function usageDataFromReasonixStatus(status: ReasonixSessionStatus): UsageData {
+  const turn = status.usage.turn;
+  const cumulative = status.usage.cumulative;
+  return {
+    promptTokens: turn.promptTokens,
+    completionTokens: turn.completionTokens,
+    totalTokens: turn.promptTokens + turn.completionTokens,
+    cacheHitTokens: turn.cacheHitTokens,
+    cacheMissTokens: turn.cacheMissTokens,
+    reasoningTokens: turn.reasoningTokens,
+    sessionCacheHitTokens: cumulative.cacheHitTokens,
+    sessionCacheMissTokens: cumulative.cacheMissTokens,
+    ...(turn.estimatedCost === undefined || turn.estimatedCost === null ? {} : { cost: turn.estimatedCost }),
+    ...(turn.currency === undefined || turn.currency === null ? {} : { currency: turn.currency }),
+  };
 }
 
 export function parsePermissionRequestParams(value: unknown): ProtocolParseResult<PermissionRequestParams> {
@@ -182,12 +238,33 @@ function isUsage(value: unknown): boolean {
     .every((key) => typeof value[key] === "number" && Number.isFinite(value[key]));
 }
 
+function isReasonixStatusUsage(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const counts = ["promptTokens", "completionTokens", "reasoningTokens", "cacheHitTokens", "cacheMissTokens"];
+  return counts.every((key) => nonNegativeInteger(value[key]))
+    && (value.estimated === undefined || typeof value.estimated === "boolean")
+    && optionalFiniteNumber(value.cacheHitRatio)
+    && optionalFiniteNumber(value.estimatedCost)
+    && (value.currency === undefined || value.currency === null || typeof value.currency === "string")
+    && typeof value.usageSource === "string";
+}
+
+function optionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
 function isPermissionOption(value: unknown): boolean {
   return isRecord(value) && nonEmptyString(value.optionId) && nonEmptyString(value.name) && nonEmptyString(value.kind);
 }
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function nonEmptyString(value: unknown): value is string {

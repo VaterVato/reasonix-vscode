@@ -5,6 +5,7 @@ const required = process.env.REASONIX_ACP_SMOKE_REQUIRED === "1";
 const independentAxesRequired = process.env.REASONIX_ACP_INDEPENDENT_AXES_REQUIRED === "1";
 const binary = process.env.REASONIX_BINARY || "reasonix";
 const timeoutMs = Number(process.env.REASONIX_ACP_SMOKE_TIMEOUT_MS || 15_000);
+const reasonixStatusMethod = "_reasonix.io/session/status";
 
 const child = spawn(binary, ["acp"], {
   cwd: process.cwd(),
@@ -92,6 +93,17 @@ try {
     throw new Error("session/new did not return a sessionId");
   }
 
+  let reasonixStatus = "not advertised";
+  const statusCapability = init.result.agentCapabilities._meta?.[reasonixStatusMethod];
+  if (statusCapability?.schemaVersion === 1) {
+    const status = await request(reasonixStatusMethod, { sessionId });
+    failOnError(status, reasonixStatusMethod);
+    if (status.result?.schemaVersion !== 1 || status.result?.sessionId !== sessionId || !status.result?.usage?.turn || !status.result?.usage?.cumulative) {
+      throw new Error(`${reasonixStatusMethod} did not return a matching schema v1 usage snapshot`);
+    }
+    reasonixStatus = "schema v1";
+  }
+
   if (!Array.isArray(newSession.result?.configOptions) || !newSession.result?.modes) {
     throw new Error("session/new did not return configOptions and modes");
   }
@@ -135,6 +147,7 @@ try {
   console.log(`- config options: ${newSession.result.configOptions.length}`);
   console.log(`- modes: ${newSession.result.modes.availableModes?.length ?? 0}`);
   console.log(`- independent axes: ${independentAxes ? "work_mode + tool_approval" : "legacy"}`);
+  console.log(`- Reasonix status: ${reasonixStatus}`);
   console.log(`- session/list: ${sessions.result.sessions.length} session(s)`);
   child.kill();
   clearTimeout(timer);

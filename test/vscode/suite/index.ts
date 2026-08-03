@@ -43,6 +43,19 @@ export async function run(): Promise<void> {
   assert.equal(initialSnapshot.modes?.currentModeId, "normal");
   assert.equal(initialSnapshot.configOptions?.length, 4);
   assert.equal(initialSnapshot.sessions?.length, 1);
+  await waitForLog(fakeLog, "_reasonix.io/session/status");
+
+  await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "usage_probe" });
+  const usageSnapshot = await waitForSnapshot((state) => Array.isArray(state.items)
+    && state.items.some((item: TestRecord) => item.type === "usage"));
+  const usageItem = usageSnapshot.items.find((item: TestRecord) => item.type === "usage");
+  assert.equal(usageItem.usage.totalTokens, 150);
+  assert.equal(usageItem.usage.promptTokens, 120);
+  assert.equal(usageItem.usage.completionTokens, 30);
+  assert.equal(usageItem.usage.sessionCacheHitTokens, 180);
+  assert.equal(usageSnapshot.usage.sessionCacheMissTokens, 60);
+  assert.equal(Math.round((usageSnapshot.usage.sessionCacheHitTokens
+    / (usageSnapshot.usage.sessionCacheHitTokens + usageSnapshot.usage.sessionCacheMissTokens)) * 100), 75);
 
   await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "setModel", value: "fake/fast" });
   const modelSwitch = await waitForLogMatch(fakeLog, (event) => event.method === "session/set_config_option" && event.params?.configId === "model" && event.params?.value === "fake/fast", "webview model switch");
