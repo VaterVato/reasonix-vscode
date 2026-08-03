@@ -9,14 +9,17 @@ async function main(): Promise<void> {
   const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-vscode-workspace-"));
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "reasonix-vscode-user-"));
   const fakeAcpScript = path.resolve(extensionDevelopmentPath, "test/vscode/fake-acp.cjs");
-  const fakeAcp = path.join(workspacePath, process.platform === "win32" ? "fake-acp.cmd" : "fake-acp");
+  const fakeAcp = path.join(workspacePath, process.platform === "win32" ? "reasonix.cmd" : "reasonix");
   const fakeLog = path.join(workspacePath, "fake-acp.log");
+  const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
+  const binaryMode = process.argv.includes("--path") ? "path" : "configured";
   fs.writeFileSync(path.join(workspacePath, "sample.ts"), "const answer = 42;\n");
   fs.mkdirSync(path.join(workspacePath, "src"));
   fs.writeFileSync(path.join(workspacePath, "src", "helper.ts"), "export const helper = true;\n");
   writeFakeAcpWrapper(fakeAcp, fakeAcpScript);
 
   await runTests({
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
     extensionDevelopmentPath,
     extensionTestsPath,
     launchArgs: [workspacePath, "--user-data-dir", userDataDir, "--disable-extensions", "--disable-workspace-trust"],
@@ -25,6 +28,8 @@ async function main(): Promise<void> {
       REASONIX_FAKE_LOG: fakeLog,
       REASONIX_TEST_WORKSPACE: workspacePath,
       REASONIX_TEST_COMMANDS: "1",
+      REASONIX_TEST_BINARY_MODE: binaryMode,
+      PATH: `${workspacePath}${path.delimiter}${process.env.PATH ?? ""}`,
     },
   });
 }
@@ -32,6 +37,7 @@ async function main(): Promise<void> {
 function writeFakeAcpWrapper(target: string, script: string): void {
   if (process.platform === "win32") {
     fs.writeFileSync(target, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    fs.writeFileSync(target.slice(0, -path.extname(target).length), `#!/bin/sh\n"${process.execPath}" "${script}" "$@"\n`);
     return;
   }
   fs.writeFileSync(target, `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(script)} "$@"\n`);

@@ -1,6 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Writable } from "node:stream";
 import { JsonRpcPeer } from "./jsonRpc";
+import { spawnReasonix } from "./reasonixLauncher";
 import {
   parseFSReadTextFileParams,
   parseFSWriteTextFileParams,
@@ -127,11 +128,7 @@ export class AcpClient {
       args.push("--model", this.options.model.trim());
     }
     this.appendLine(`Starting ${this.options.binaryPath} ${args.join(" ")}`);
-    this.child = spawn(this.options.binaryPath, args, {
-      cwd: this.options.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    this.child = spawnReasonix(this.options.binaryPath, args, this.options.cwd);
 
     this.peer = new JsonRpcPeer(
       this.child.stdin as Writable,

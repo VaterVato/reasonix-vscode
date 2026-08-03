@@ -40,6 +40,14 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 20
 
+      - name: Wait for Windows launcher CI
+        uses: lewagon/wait-on-check-action@v1.4.0
+        with:
+          ref: ${{ github.ref_name }}
+          check-name: "Windows ACP Launcher"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 20
+
   package:
     name: Build Release VSIX
     runs-on: ubuntu-latest
