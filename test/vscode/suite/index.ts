@@ -193,6 +193,19 @@ export async function run(): Promise<void> {
   await waitForLog(fakeLog, "session/prompt/cancelled");
   await slowTurn;
 
+  await vscode.commands.executeCommand("reasonix.test.webviewMessage", {
+    command: "sendPrompt",
+    text: "long_webview_probe",
+  });
+  await waitForLog(fakeLog, "webview/long-history-sent");
+  await waitForSnapshot((state) => state.items?.some((item: TestRecord) => item.text?.includes("long-history-tail")));
+  await vscode.commands.executeCommand("reasonix.openChat");
+  await vscode.commands.executeCommand("reasonix.test.webviewMessage", {
+    command: "sendPrompt",
+    text: "post_history_probe",
+  });
+  await waitForLog(fakeLog, "webview/post-history-prompt");
+
   await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "disconnect_probe" });
   await waitForLog(fakeLog, "process/disconnect-probe");
   await waitForLog(fakeLog, "session/resume");

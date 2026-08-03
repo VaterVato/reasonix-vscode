@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runTests } from "@vscode/test-electron";
+import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 
 async function main(): Promise<void> {
   const extensionDevelopmentPath = path.resolve(__dirname, "../../..");
@@ -18,8 +18,9 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(workspacePath, "src", "helper.ts"), "export const helper = true;\n");
   writeFakeAcpWrapper(fakeAcp, fakeAcpScript);
 
+  const testExecutable = vscodeExecutablePath ?? await downloadAndUnzipVSCode("stable");
   await runTests({
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : {}),
+    vscodeExecutablePath: existingVSCodeExecutable(testExecutable),
     extensionDevelopmentPath,
     extensionTestsPath,
     launchArgs: [workspacePath, "--user-data-dir", userDataDir, "--disable-extensions", "--disable-workspace-trust"],
@@ -32,6 +33,19 @@ async function main(): Promise<void> {
       PATH: `${workspacePath}${path.delimiter}${process.env.PATH ?? ""}`,
     },
   });
+}
+
+function existingVSCodeExecutable(downloadedExecutable: string): string {
+  if (fs.existsSync(downloadedExecutable)) {
+    return downloadedExecutable;
+  }
+  if (process.platform === "darwin" && downloadedExecutable.endsWith("/MacOS/Electron")) {
+    const renamedExecutable = downloadedExecutable.slice(0, -"Electron".length) + "Code";
+    if (fs.existsSync(renamedExecutable)) {
+      return renamedExecutable;
+    }
+  }
+  return downloadedExecutable;
 }
 
 function writeFakeAcpWrapper(target: string, script: string): void {
