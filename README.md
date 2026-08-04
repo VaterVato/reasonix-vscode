@@ -18,7 +18,7 @@ The extension does not bundle a Reasonix binary. It uses `reasonix.binaryPath` w
 - Native `session/list`, `load`, `resume`, `close`, and `delete` lifecycle with automatic reconnect/resume.
 - ACP filesystem overlay reads unsaved buffers and applies guarded workspace edits; client-owned terminals stream commands in VS Code.
 - Current file, selection, nearby cursor context, and `@` mentions sent as ACP resource blocks on the current user turn.
-- Send-time confirmation before editor context is appended to a user turn.
+- Visible editor-context controls that apply the selected mode without interrupting send.
 - Composer `+` menu to attach local files or images (sent as image blocks when the backend supports them), reference workspace files or folders, reference past sessions, and insert slash commands.
 - Tool-call cards with raw input, results, and backend-provided diff previews.
 - Separate inline approval and structured question controls; Ask questions are never auto-answered.
@@ -52,7 +52,7 @@ Use Reasonix 1.0 or newer. Reasonix itself must already be configured with the p
 7. Type `@` to open workspace file and folder suggestions; selecting `@src/file.ts` or `@src/` attaches bounded resource context to the user turn.
 8. Use `Reasonix: Send Selection` from the command palette or editor context menu to send the current editor context.
 
-When a pending tool call needs approval, Reasonix shows an inline approval card. If the chat view is unavailable, the extension falls back to a VS Code modal approval prompt.
+When a pending tool call needs approval, Reasonix reveals the chat view and shows an inline approval card. If the view cannot be opened, the extension falls back to a non-modal VS Code notification.
 
 ## Commands
 
@@ -88,7 +88,8 @@ Reasonix for VS Code follows a narrow host boundary:
 - Editor context and mentions are ACP resource blocks on user turns only, never system prompts, tool schemas, or stable prefixes.
 - Filesystem callbacks require a trusted workspace, stay inside the workspace after symlink resolution, and refuse stale concurrent edits.
 - Terminal callbacks require a trusted workspace, keep the working directory inside it, stream through a VS Code terminal, and bound captured output.
-- Normal chat sends ask for confirmation before adding active editor context.
+- The composer shows the active context mode; matching editor context is appended automatically when the prompt is sent.
+- Set the context mode to `Off` when a prompt should not include editor context.
 - `Reasonix: Send Selection` is an explicit command for sending the active selection or nearby cursor window.
 - OutputChannel logs redact the active workspace path and home directory before display.
 

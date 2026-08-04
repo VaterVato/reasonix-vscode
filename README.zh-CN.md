@@ -18,7 +18,7 @@ Reasonix for VS Code 把本地 Reasonix coding agent 带进编辑器。它实现
 - 原生 `session/list`、`load`、`resume`、`close`、`delete` 生命周期，并支持断线自动恢复。
 - ACP 文件覆盖层可读取未保存缓冲区并执行受保护的 workspace edit；客户端终端会在 VS Code 内实时展示命令。
 - 当前文件、选区、光标附近上下文与 `@` 引用通过当前 user turn 的 ACP resource block 发送。
-- 普通聊天在追加编辑器上下文前会先确认。
+- 输入框会显示当前上下文模式，发送时按所选模式直接附加，不打断操作。
 - 输入区 `+` 菜单支持附加本机文件或图片（后端支持时以 image block 发送）、`@` 工作区引用、历史会话引用和斜杠命令。
 - 工具调用卡片展示 raw input、执行结果和后端提供的 diff preview。
 - 审批与结构化问题使用不同交互；Ask 问题永远不会被自动回答。
@@ -52,7 +52,7 @@ npm i -g reasonix
 7. 输入 `@` 打开 workspace 文件和文件夹候选；选择 `@src/file.ts` 或 `@src/` 后，发送时会附加受限资源上下文。
 8. 使用 command palette 或 editor context menu 中的 `Reasonix: Send Selection` 发送当前编辑器上下文。
 
-当工具调用需要审批时，Reasonix 会显示内嵌 approval card。如果聊天视图不可用，扩展会回退到 VS Code modal approval prompt。
+当工具调用需要审批时，Reasonix 会自动展开聊天视图并显示内嵌 approval card。如果视图无法打开，扩展会回退到非模态 VS Code 通知。
 
 ## 命令
 
@@ -88,7 +88,8 @@ Reasonix for VS Code 保持很窄的宿主边界：
 - 编辑器上下文和 `@` 引用只作为 user turn 的 ACP resource block，不进入 system prompt、tool schema 或稳定前缀。
 - 文件回调要求 trusted workspace，解析符号链接后仍必须位于工作区内，并拒绝覆盖并发修改。
 - 终端回调要求 trusted workspace，cwd 必须位于工作区内，在 VS Code 终端中实时展示，并限制输出缓存。
-- 普通聊天发送前，会先确认是否追加 active editor context。
+- 输入框会显示当前上下文模式；发送时自动附加匹配的编辑器上下文。
+- 不希望 prompt 携带编辑器上下文时，将上下文模式切换为“关闭”。
 - `Reasonix: Send Selection` 是显式发送 active selection 或 nearby cursor window 的命令。
 - OutputChannel 日志会在展示前脱敏 active workspace 路径和 home 目录。
 

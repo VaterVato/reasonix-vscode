@@ -324,7 +324,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       void vscode.window.showInformationMessage("No editor context is available.");
       return;
     }
-    await this.sendPrompt("Use the current VS Code editor context.", true);
+    await this.sendPrompt("Use the current VS Code editor context.", "nearby");
   }
 
   cancelTurn(): void {
@@ -1137,7 +1137,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 
   private async sendPrompt(
     text: string,
-    appendContext: boolean,
+    appendContext: boolean | IncludeSelectionMode,
     toolApprovalMode?: ToolApprovalMode,
     collaborationMode?: CollaborationMode,
     workMode?: TokenMode,
@@ -1190,10 +1190,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
           return;
         }
       }
-      blocks = appendContext ? await this.withConfirmedEditorContext(blocks) : blocks;
-      if (!blocks) {
-        return;
-      }
+      blocks = appendContext ? this.withEditorContext(blocks, appendContext === true ? undefined : appendContext) : blocks;
       if (withMentions.mentions.length > 0) {
         this.appendOutput(`Attached ${withMentions.mentions.length} @ resource mention(s): ${withMentions.mentions.map((mention) => mention.relativePath).join(", ")}`, folder);
       }
@@ -1231,22 +1228,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     }
   }
 
-  private async withConfirmedEditorContext(blocks: ContentBlock[]): Promise<ContentBlock[] | undefined> {
-    const info = buildEditorContextBlock();
-    if (!info) {
-      return blocks;
-    }
-    const action = await vscode.window.showInformationMessage(
-      `Reasonix will include VS Code context from ${info.summary}.`,
-      { modal: true, detail: truncate(info.block.type === "resource" ? info.block.resource.text ?? "" : "", 4000) },
-      "Send with Context",
-      "Send without Context",
-      "Cancel",
-    );
-    if (action === "Cancel" || action === undefined) {
-      return undefined;
-    }
-    return action === "Send without Context" ? blocks : [...blocks, info.block];
+  private withEditorContext(blocks: ContentBlock[], mode?: IncludeSelectionMode): ContentBlock[] {
+    const info = buildEditorContextBlock(mode);
+    return info ? [...blocks, info.block] : blocks;
   }
 
   private async applyDefaultToolApproval(client: AcpClient, state: WorkspaceChatState, folder: vscode.WorkspaceFolder): Promise<void> {
@@ -1508,6 +1492,8 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 
   private async handlePermissionRequest(folder: vscode.WorkspaceFolder, params: PermissionRequestParams): Promise<PermissionRequestResult> {
     const state = this.stateFor(folder);
+    const stateKey = workspaceKey(folder);
+    const approvalId = params.toolCall.toolCallId;
     const approvalMode = this.toolApprovalMode(state);
     const autoResult = this.toolApprovalOption(state) ? undefined : this.autoPermissionResult(params, approvalMode);
     if (autoResult) {
@@ -1525,14 +1511,35 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       }
     }
 
-    if (!this.view) {
-      const result = await this.modalPermission(params);
-      this.postSnapshot(resolveApprovalItem(state.items, params.toolCall.toolCallId, result.outcome.outcome === "selected"));
-      return result;
-    }
-    return await new Promise<PermissionRequestResult>((resolve) => {
-      this.pendingApprovals.set(params.toolCall.toolCallId, { stateKey: workspaceKey(folder), resolve, options: params.options });
+    let resolveDecision!: (value: PermissionRequestResult) => void;
+    const decision = new Promise<PermissionRequestResult>((resolve) => {
+      resolveDecision = resolve;
     });
+    this.pendingApprovals.set(approvalId, { stateKey, resolve: resolveDecision, options: params.options });
+
+    if (this.view) {
+      this.view.show();
+    } else {
+      try {
+        await vscode.commands.executeCommand("reasonix.openChat");
+      } catch (err) {
+        this.appendOutput(`Could not reveal Reasonix approval: ${errorMessage(err)}`, folder);
+      }
+    }
+
+    if (!this.pendingApprovals.has(approvalId)) {
+      return decision;
+    }
+    if (this.view) {
+      this.postSnapshot(approvalIndex);
+      return decision;
+    }
+
+    this.pendingApprovals.delete(approvalId);
+    const result = await this.fallbackPermission(params);
+    this.postSnapshot(resolveApprovalItem(state.items, approvalId, result.outcome.outcome === "selected"));
+    resolveDecision(result);
+    return result;
   }
 
   private autoPermissionResult(params: PermissionRequestParams, mode: ToolApprovalMode): PermissionRequestResult | undefined {
@@ -1546,7 +1553,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     return option ? { outcome: { outcome: "selected", optionId: option.optionId } } : undefined;
   }
 
-  private async modalPermission(params: PermissionRequestParams): Promise<PermissionRequestResult> {
+  private async fallbackPermission(params: PermissionRequestParams): Promise<PermissionRequestResult> {
     if (isQuestionRequest(params)) {
       const picked = await vscode.window.showQuickPick(
         params.options
@@ -1563,8 +1570,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       { title: "Reject", kind: "cancelled" },
     ];
     const picked = await vscode.window.showWarningMessage(
-      `Reasonix wants to run ${params.toolCall.title ?? "a tool"}`,
-      { modal: true, detail: permissionDetail(params) },
+      permissionNotification(params),
       ...choices.map((choice) => choice.title),
     );
     const choice = choices.find((candidate) => candidate.title === picked);
@@ -2350,21 +2356,12 @@ function isSessionSummary(value: unknown): value is SessionSummary {
   return typeof value.id === "string" && typeof value.title === "string" && typeof value.updatedAt === "number";
 }
 
-function permissionDetail(params: PermissionRequestParams): string {
-  const lines = [`Kind: ${params.toolCall.kind ?? "other"}`];
+function permissionNotification(params: PermissionRequestParams): string {
+  const lines = [`Reasonix wants to run ${params.toolCall.title ?? "a tool"}.`];
   if (params.toolCall.preview) {
-    lines.push(`Target: ${params.toolCall.preview.path}`);
-    lines.push(`Change: +${params.toolCall.preview.added} -${params.toolCall.preview.removed}`);
+    lines.push(`${params.toolCall.preview.path} (+${params.toolCall.preview.added} -${params.toolCall.preview.removed})`);
   }
-  if (params.toolCall.rawInput !== undefined) {
-    lines.push("Input:");
-    lines.push(truncate(JSON.stringify(params.toolCall.rawInput, null, 2), 2000));
-  }
-  return lines.join("\n");
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max)}\n...(truncated)`;
+  return lines.join(" ");
 }
 
 function getNonce(): string {

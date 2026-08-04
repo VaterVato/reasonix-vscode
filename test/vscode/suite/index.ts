@@ -101,6 +101,24 @@ export async function run(): Promise<void> {
   editor.selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(0, doc.lineAt(0).text.length));
   await editor.edit((edit) => edit.replace(doc.lineAt(0).range, "const answer = 84;"));
 
+  await vscode.workspace.getConfiguration("reasonix").update("includeSelectionMode", "selectionOnly", vscode.ConfigurationTarget.Workspace);
+  await waitForConfig("includeSelectionMode", "selectionOnly");
+  await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "context_auto_probe" });
+  const automaticContext = await waitForLogMatch(fakeLog, (event) => event.method === "session/prompt" && JSON.stringify(event.params).includes("context_auto_probe"), "automatic editor context");
+  assert.match(JSON.stringify(automaticContext.params), /sample\.ts/);
+  assert.match(JSON.stringify(automaticContext.params), /const answer = 84/);
+
+  await vscode.workspace.getConfiguration("reasonix").update("includeSelectionMode", "off", vscode.ConfigurationTarget.Workspace);
+  await waitForConfig("includeSelectionMode", "off");
+  await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "context_off_probe" });
+  const contextOff = await waitForLogMatch(fakeLog, (event) => event.method === "session/prompt" && JSON.stringify(event.params).includes("context_off_probe"), "disabled editor context");
+  assert.doesNotMatch(JSON.stringify(contextOff.params), /VS Code selection/);
+
+  await vscode.commands.executeCommand("reasonix.sendSelection");
+  const explicitContext = await waitForLogMatch(fakeLog, (event) => event.method === "session/prompt" && JSON.stringify(event.params).includes("Use the current VS Code editor context"), "explicit editor context");
+  assert.match(JSON.stringify(explicitContext.params), /sample\.ts/);
+  assert.match(JSON.stringify(explicitContext.params), /const answer = 84/);
+
   await vscode.commands.executeCommand("reasonix.test.webviewMessage", { command: "sendPrompt", text: "fs_read_probe" });
   const fsRead = await waitForLog(fakeLog, "fs-read/response");
   assert.match(JSON.stringify(fsRead), /const answer = 84/);

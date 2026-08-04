@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Removed repeated editor-context confirmation dialogs. The visible composer context mode now controls automatic context inclusion, while explicit `Send Selection` actions attach the current selection or cursor window directly.
+- Replaced the fallback tool-permission modal with an automatically revealed inline approval card and a non-modal notification fallback when the chat view cannot be opened.
+
 ## 0.3.1
 
 - Restored usage cards and cache telemetry with Reasonix 1.19+ by consuming its advertised namespaced ACP status snapshot and update methods, while retaining compatibility with legacy usage updates.
