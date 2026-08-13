@@ -84,6 +84,7 @@ type ChatSnapshot = WorkspaceChatState & {
   uiLanguage: UiLanguage;
   settings: ReasonixSettings;
   sessions: SessionSummary[];
+  cnyPerUsd: number;
 };
 
 type ChatViewState = Omit<ChatSnapshot, "items">;
@@ -167,7 +168,8 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration("reasonix.model") ||
         event.affectsConfiguration("reasonix.binaryPath") ||
         event.affectsConfiguration("reasonix.autoStart") ||
-        event.affectsConfiguration("reasonix.trace")
+        event.affectsConfiguration("reasonix.trace") ||
+        event.affectsConfiguration("reasonix.cnyPerUsd")
       ) {
         provider.refreshActiveWorkspace();
       }
@@ -1948,6 +1950,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       uiLanguage: configuredUiLanguage(),
       settings: currentSettings(),
       sessions: folder ? (state.sessions ?? this.sessionHistory(folder)) : [],
+      cnyPerUsd: configuredCnyPerUsd(),
     };
     const { items, ...viewState } = snapshot;
     this.updateStatusBar(folder);
@@ -2495,6 +2498,12 @@ function currentSettings(): ReasonixSettings {
 function configuredUiLanguage(): UiLanguage {
   const value = vscode.workspace.getConfiguration("reasonix").get<string>("uiLanguage", "auto");
   return value === "en" || value === "zh-CN" || value === "auto" ? value : "auto";
+}
+
+/** USD→CNY conversion rate for cost display (configurable). */
+function configuredCnyPerUsd(): number {
+  const value = vscode.workspace.getConfiguration("reasonix").get<number>("cnyPerUsd", 7.2);
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 7.2;
 }
 
 function effectiveUiLocale(): string {

@@ -2958,3 +2958,12 @@ pre {
   vertical-align: baseline;
   white-space: normal;
 }
+
+/* Reasoning body: expanded by default with internal scrolling */
+.thought-scroll-body { max-height: 22em; overflow-y: auto; padding-right: 4px; }
+/* Usage item: collapsed one-line summary with tokens and cost */
+details.usage > summary.usage-summary { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 2px 0; }
+details.usage > summary.usage-summary .message-actions { margin-left: auto; }
+details.usage > summary.usage-summary .usage-summary__cost { color: var(--vscode-descriptionForeground); }
+details.usage[open] > summary.usage-summary { margin-bottom: 6px; }
+details.usage > .usage-grid { margin-left: 16px; }

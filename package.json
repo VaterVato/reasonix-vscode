@@ -146,6 +146,11 @@
           ],
           "default": "selectionOnly",
           "description": "Controls how the active editor selection or cursor window is appended to prompts."
+        },
+        "reasonix.cnyPerUsd": {
+          "type": "number",
+          "default": 7.2,
+          "description": "USD to CNY conversion rate used to display usage costs in RMB."
         }
       }
     },

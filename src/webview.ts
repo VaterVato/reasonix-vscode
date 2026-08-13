@@ -75,6 +75,7 @@ type Snapshot = {
   sessions: SessionSummary[];
   mcp: McpSnapshot;
   availableCommands?: AvailableCommand[];
+  cnyPerUsd: number;
 };
 
 type RuntimeSelectOption = {
@@ -1253,14 +1254,35 @@ function patchTranscript(patch: TranscriptSplice<ChatItem>, oldLength: number, w
     return;
   }
 
+  // Preserve open state and scroll position of reasoning bodies that are
+  // about to be re-rendered by the streaming patch.
+  const preservedThoughts = new Map<number, { open: boolean; scrollTop: number }>();
   for (const node of Array.from(transcript.querySelectorAll<HTMLElement>("[data-transcript-item]"))) {
     const index = Number(node.dataset.itemIndex);
     if (!Number.isInteger(index) || index >= patch.start || index < renderedTranscriptStart) {
+      if (Number.isInteger(index) && index >= patch.start) {
+        const details = node.querySelector<HTMLDetailsElement>("details.thought-details");
+        const body = node.querySelector<HTMLElement>(".thought-scroll-body");
+        if (details) {
+          preservedThoughts.set(index, { open: details.open, scrollTop: body?.scrollTop ?? 0 });
+        }
+      }
       node.remove();
     }
   }
   for (let index = Math.max(patch.start, renderedTranscriptStart); index < snapshot.items.length; index += 1) {
     transcript.append(renderItem(snapshot.items[index], index));
+  }
+  for (const [index, state] of preservedThoughts) {
+    const node = transcript.querySelector<HTMLElement>(`[data-transcript-item][data-item-index="${index}"]`);
+    const details = node?.querySelector<HTMLDetailsElement>("details.thought-details");
+    const body = node?.querySelector<HTMLElement>(".thought-scroll-body");
+    if (details) {
+      details.open = state.open;
+    }
+    if (body) {
+      body.scrollTop = state.scrollTop;
+    }
   }
   appendTranscriptHistoryControl();
 
@@ -2293,6 +2315,7 @@ function renderMessage(item: Extract<ChatItem, { type: "message" }>, index: numb
 function renderThought(text: string, index: number): HTMLElement {
   const details = document.createElement("details");
   details.className = "thought-details";
+  details.open = true; // Reasoning summaries are expanded by default.
   const summary = document.createElement("summary");
   const title = document.createElement("span");
   title.className = "thought-title";
@@ -2302,7 +2325,7 @@ function renderThought(text: string, index: number): HTMLElement {
   preview.textContent = firstLine(text);
   summary.append(title, preview);
   const body = document.createElement("div");
-  body.className = "text markdown-host";
+  body.className = "text markdown-host thought-scroll-body";
   body.append(renderMarkdown(text));
   details.append(summary, body);
   const actions = messageActions({ type: "message", role: "thought", text }, index);
@@ -2512,12 +2535,22 @@ function renderPlan(item: Extract<ChatItem, { type: "plan" }>): HTMLElement {
 }
 
 function renderUsage(usage: UsageData, index: number): HTMLElement {
-  const node = document.createElement("section");
-  node.className = "item usage";
+  const details = document.createElement("details");
+  details.className = "item usage";
+  const summary = document.createElement("summary");
+  summary.className = "usage-summary";
+  const summaryTokens = document.createElement("span");
+  summaryTokens.className = "usage-summary__tokens";
+  summaryTokens.textContent = `${label("tokens")}: ${formatNumber(usage.totalTokens)}`;
+  const costLine = usageCostLine(usage);
+  const summaryCost = document.createElement("span");
+  summaryCost.className = "usage-summary__cost";
+  summaryCost.textContent = costLine ? ` · ${costLine}` : "";
   const actions = document.createElement("div");
   actions.className = "message-actions";
   actions.append(copyButton(stableStringify(usage), label("copy")));
-  node.append(renderItemHeader(label("usage"), actions));
+  summary.append(summaryTokens, summaryCost, actions);
+  details.append(summary);
   const text = document.createElement("div");
   text.className = "usage-grid";
   text.append(metric(label("tokens"), formatNumber(usage.totalTokens)));
@@ -2530,13 +2563,13 @@ function renderUsage(usage: UsageData, index: number): HTMLElement {
     text.append(metric(label("reasoning"), formatNumber(usage.reasoningTokens)));
   }
   if (usage.cost !== undefined) {
-    text.append(metric(label("cost"), `${usage.currency ?? ""}${usage.cost.toFixed(4)}`));
+    text.append(metric(label("cost"), usageCostLine(usage)));
   }
-  node.append(text);
+  details.append(text);
 
   if (usage.cacheDiagnostics) {
     const reasons = usage.cacheDiagnostics.prefixChangeReasons?.join("\n") ?? "";
-    node.append(
+    details.append(
       detailsBlock(
         label("cacheDiagnostics"),
         [
@@ -2553,8 +2586,21 @@ function renderUsage(usage: UsageData, index: number): HTMLElement {
     );
   }
 
-  node.dataset.itemIndex = String(index);
-  return node;
+  details.dataset.itemIndex = String(index);
+  return details;
+}
+
+/** Renders the cost line, converting USD to CNY with the configured rate. */
+function usageCostLine(usage: UsageData): string {
+  if (usage.cost === undefined || !Number.isFinite(usage.cost)) {
+    return "";
+  }
+  const currency = (usage.currency ?? "").trim().toUpperCase();
+  if (currency === "USD" || currency === "US$" || currency === "$" || currency === "") {
+    const rate = snapshot.cnyPerUsd;
+    return `¥${(usage.cost * rate).toFixed(4)}`;
+  }
+  return `${usage.currency ?? ""}${usage.cost.toFixed(4)}`;
 }
 
 function renderItemHeader(titleText: string, actions?: HTMLElement): HTMLElement {
@@ -3069,6 +3115,7 @@ function emptySnapshot(): Snapshot {
     },
     sessions: [],
     mcp: { connected: [], configured: [], disconnected: [] },
+    cnyPerUsd: 7.2,
   };
 }
 
@@ -3107,6 +3154,7 @@ function normalizeSnapshot(value: unknown): Snapshot {
     sessions: Array.isArray(value.sessions) ? (value.sessions as SessionSummary[]).filter(isSessionSummary) : [],
     mcp: normalizeMcp(value.mcp),
     availableCommands: Array.isArray(value.availableCommands) ? value.availableCommands as AvailableCommand[] : undefined,
+    cnyPerUsd: typeof value.cnyPerUsd === "number" && Number.isFinite(value.cnyPerUsd) && value.cnyPerUsd > 0 ? value.cnyPerUsd : 7.2,
   };
 }
 
