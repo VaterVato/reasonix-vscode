@@ -149,6 +149,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("reasonix.newSession", () => provider.newSession()),
     vscode.commands.registerCommand("reasonix.sendSelection", () => provider.sendSelection()),
+    vscode.commands.registerCommand("reasonix.addToChat", (arg?: vscode.Uri | { uri?: vscode.Uri }) => {
+      void provider.addToChat(arg instanceof vscode.Uri ? arg : arg?.uri);
+    }),
     vscode.commands.registerCommand("reasonix.cancelTurn", () => provider.cancelTurn()),
     vscode.commands.registerCommand("reasonix.pickModel", () => provider.pickModel()),
     vscode.commands.registerCommand("reasonix.pickEffort", () => provider.pickEffort()),
@@ -201,6 +204,8 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   private readonly snapshotSync = new SnapshotSync<ChatItem>();
   private snapshotTimer?: NodeJS.Timeout;
   private snapshotWorkspaceKey?: string;
+  private pendingInsert?: { id: number; text: string };
+  private nextInsertId = 1;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -325,6 +330,143 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       return;
     }
     await this.sendPrompt("Use the current VS Code editor context.", "nearby");
+  }
+
+  /**
+   * Adds a file or directory (optionally with the current editor selection) to
+   * the Reasonix composer as a workspace-relative @ mention, inserted at the
+   * caret. Files outside the workspace are attached by content instead.
+   */
+  async addToChat(uri?: vscode.Uri): Promise<void> {
+    const resolved = uri ?? vscode.window.activeTextEditor?.document.uri;
+    if (!resolved || resolved.scheme !== "file") {
+      void vscode.window.showInformationMessage("Add to Reasonix Chat works with workspace files and folders.");
+      return;
+    }
+    let stat: vscode.FileStat;
+    try {
+      stat = await vscode.workspace.fs.stat(resolved);
+    } catch {
+      void vscode.window.showInformationMessage("Add to Reasonix Chat could not access the selected resource.");
+      return;
+    }
+    const folder = vscode.workspace.getWorkspaceFolder(resolved) ?? this.currentWorkspaceFolder();
+    const relative = folder ? path.relative(folder.uri.fsPath, resolved.fsPath).replace(/\\/g, "/") : undefined;
+    const insideWorkspace = relative !== undefined && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)));
+
+    await vscode.commands.executeCommand("workbench.view.extension.reasonix");
+
+    if (stat.type === vscode.FileType.Directory) {
+      if (!insideWorkspace) {
+        void vscode.window.showInformationMessage("Directories can only be referenced inside the workspace.");
+        return;
+      }
+      this.queueInsert(`@${mentionTokenForPath(relative, true)} `);
+      return;
+    }
+
+    const editor = vscode.window.activeTextEditor;
+    const selection = editor && !editor.selection.isEmpty && editor.document.uri.fsPath === resolved.fsPath
+      ? {
+        text: editor.document.getText(editor.selection),
+        startLine: editor.selection.start.line + 1,
+        endLine: editor.selection.end.line + 1,
+        languageId: editor.document.languageId,
+      }
+      : undefined;
+
+    if (!insideWorkspace) {
+      // Outside the workspace @ mentions cannot resolve, so attach the content instead.
+      const attachment: PendingAttachment = {
+        kind: "file",
+        name: path.basename(resolved.fsPath),
+        uri: resolved.fsPath,
+        mimeType: mimeFromFileName(resolved.fsPath),
+      };
+      if (this.view) {
+        void this.view.webview.postMessage({ type: "attachmentsPicked", attachments: [attachment] });
+      } else {
+        void vscode.window.showInformationMessage("Open the Reasonix chat view first to attach this file.");
+      }
+      return;
+    }
+
+    const mention = `@${mentionTokenForPath(relative, false)}`;
+    if (!selection) {
+      this.queueInsert(`${mention} `);
+      return;
+    }
+    const header = `Selected lines ${selection.startLine}-${selection.endLine} from ${relative}:`;
+    const fence = "```";
+    this.queueInsert(`${mention}\n${header}\n${fence}${selection.languageId}\n${selection.text}\n${fence}\n`);
+  }
+
+  /**
+   * Handles file/folder URIs dropped onto the webview. Directories and text
+   * files become @ mentions; images are attached by content.
+   */
+  private async handleFileDrop(uris: string[]): Promise<void> {
+    const folder = this.currentWorkspaceFolder();
+    const mentions: string[] = [];
+    const attachments: PendingAttachment[] = [];
+    for (const raw of uris) {
+      let uri: vscode.Uri;
+      try {
+        uri = vscode.Uri.parse(raw, true);
+      } catch {
+        continue;
+      }
+      if (uri.scheme !== "file") {
+        continue;
+      }
+      let stat: vscode.FileStat;
+      try {
+        stat = await vscode.workspace.fs.stat(uri);
+      } catch {
+        continue;
+      }
+      const relative = folder ? path.relative(folder.uri.fsPath, uri.fsPath).replace(/\\/g, "/") : undefined;
+      const insideWorkspace = relative !== undefined && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)));
+      if (stat.type === vscode.FileType.Directory) {
+        if (insideWorkspace) {
+          mentions.push(`@${mentionTokenForPath(relative, true)}`);
+        }
+        continue;
+      }
+      if (isImageMime(mimeFromFileName(uri.fsPath))) {
+        attachments.push({ kind: "image", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
+        continue;
+      }
+      if (insideWorkspace) {
+        mentions.push(`@${mentionTokenForPath(relative, false)}`);
+      } else {
+        attachments.push({ kind: "file", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
+      }
+    }
+    if (attachments.length > 0 && this.view) {
+      void this.view.webview.postMessage({ type: "attachmentsPicked", attachments });
+    }
+    if (mentions.length > 0) {
+      this.queueInsert(`${mentions.join(" ")} `);
+    }
+  }
+
+  /**
+   * Inserts text into the composer at the caret. The webview acknowledges with
+   * an insertApplied message; if the webview is not ready yet the insert is
+   * retried whenever a webview message arrives (e.g. the initial snapshot).
+   */
+  private queueInsert(text: string): void {
+    this.pendingInsert = { id: this.nextInsertId, text };
+    this.nextInsertId += 1;
+    this.flushPendingInsert();
+  }
+
+  private flushPendingInsert(): void {
+    if (!this.pendingInsert || !this.view) {
+      return;
+    }
+    void this.view.webview.postMessage({ type: "insertAtCursor", id: this.pendingInsert.id, text: this.pendingInsert.text });
   }
 
   cancelTurn(): void {
@@ -697,12 +839,21 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   }
 
   private async handleWebviewMessage(raw: unknown): Promise<void> {
+    this.flushPendingInsert();
     const message = parseWebviewMessage(raw);
     if (!message) {
       this.appendOutput(`Ignored invalid webview message: ${JSON.stringify(raw)}`);
       return;
     }
     switch (message.command) {
+      case "fileDrop":
+        await this.handleFileDrop(message.uris);
+        return;
+      case "insertApplied":
+        if (this.pendingInsert?.id === message.id) {
+          this.pendingInsert = undefined;
+        }
+        return;
       case "sendPrompt":
         const activeFolder = this.currentWorkspaceFolder();
         const nativeCommand = activeFolder
@@ -2256,6 +2407,22 @@ async function selectReasonixBinary(): Promise<string | undefined> {
 
 function workspaceKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
+}
+
+/**
+ * Builds an @ mention token for a workspace-relative path. Segments are
+ * URI-encoded because mention tokens cannot contain whitespace or quotes;
+ * the resolver decodes them before use. The workspace root itself and
+ * extensionless root-level files get a "./" prefix so the resolver accepts
+ * them.
+ */
+function mentionTokenForPath(relativePath: string, isDirectory: boolean): string {
+  if (relativePath === "") {
+    return "./"; // workspace root directory listing
+  }
+  const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
+  const token = relativePath.includes("/") || relativePath.includes(".") ? encoded : `./${encoded}`;
+  return isDirectory ? `${token}/` : token;
 }
 
 function emptyState(): WorkspaceChatState {

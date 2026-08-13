@@ -126,7 +126,11 @@ function normalizeMentionPath(token: string): string | undefined {
   }
   const normalized = path.normalize(decoded).replace(/\\/g, "/");
   const canonical = normalized.replace(/\/+$/g, "");
-  if (canonical === "." || canonical.startsWith("../") || canonical === "..") {
+  if (canonical === ".") {
+    // The workspace root itself: listing it is useful for drag/drop and explorer additions.
+    return "";
+  }
+  if (canonical.startsWith("../") || canonical === "..") {
     return undefined;
   }
   if (!looksLikePath(decoded) && !looksLikePath(canonical)) {

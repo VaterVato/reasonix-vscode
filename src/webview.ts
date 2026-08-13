@@ -519,6 +519,76 @@ approvalModebar.addEventListener("keydown", (event) => {
 sessionPopover.addEventListener("click", handleSessionClick);
 sessionRailList.addEventListener("click", handleSessionClick);
 
+// Drag and drop from the VS Code explorer (or the system file manager) into
+// the webview. VS Code synthesizes HTML5 drag events carrying the dropped
+// resources as URIs, which we forward to the host for resolution.
+const URI_LIST_MIME = "text/uri-list";
+const RESOURCE_LIST_MIME = "application/vnd.code.resources";
+
+function droppedResourceUris(event: DragEvent): string[] {
+  const data = event.dataTransfer;
+  if (!data) {
+    return [];
+  }
+  const uris: string[] = [];
+  try {
+    const uriList = data.getData(URI_LIST_MIME);
+    if (uriList) {
+      for (const line of uriList.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          uris.push(trimmed);
+        }
+      }
+      return uris;
+    }
+    const resourceList = data.getData(RESOURCE_LIST_MIME);
+    if (resourceList) {
+      const parsed: unknown = JSON.parse(resourceList);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          const value = typeof item === "string"
+            ? item
+            : typeof (item as { uri?: { toString(): string } } | null | undefined)?.uri?.toString?.() === "string"
+              ? (item as { uri: { toString(): string } }).uri.toString()
+              : "";
+          if (value) {
+            uris.push(value);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore unreadable or malformed drag payloads.
+  }
+  return uris;
+}
+
+function isResourceDrag(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  return types.some((type) => type === URI_LIST_MIME || type === RESOURCE_LIST_MIME || type.toLowerCase() === "files");
+}
+
+document.addEventListener("dragover", (event) => {
+  if (!isResourceDrag(event)) {
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+});
+
+document.addEventListener("drop", (event) => {
+  const uris = droppedResourceUris(event);
+  if (uris.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  vscode.postMessage({ command: "fileDrop", uris });
+});
+
 window.addEventListener("resize", () => {
   if (controlsMenuOpen) {
     positionControlsMenu();
@@ -765,6 +835,10 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
     case "attachmentsPicked":
       addAttachments(message.attachments);
       focusPromptSoon();
+      return;
+    case "insertAtCursor":
+      insertPromptText(message.text);
+      vscode.postMessage({ command: "insertApplied", id: message.id });
       return;
     case "resourceSuggestions":
       receiveResourceSuggestions(message.requestId, message.query, message.items);
@@ -1014,6 +1088,24 @@ function insertComposerTrigger(token: "@" | "/"): void {
   const end = prompt.selectionEnd;
   const needsSpace = start > 0 && !/\s/.test(prompt.value[start - 1] ?? "");
   prompt.setRangeText(`${needsSpace ? " " : ""}${token}`, start, end, "end");
+  prompt.focus();
+  resizePrompt();
+  updateSendButton(snapshot);
+  updateComposerSuggestions();
+  schedulePersistedState();
+}
+
+/** Inserts text at the composer caret (replacing any selection). */
+function insertPromptText(text: string): void {
+  if (text.length === 0) {
+    return;
+  }
+  const start = prompt.selectionStart;
+  const end = prompt.selectionEnd;
+  const needsSpaceBefore = start > 0 && !/\s/.test(prompt.value[start - 1] ?? "");
+  const needsSpaceAfter = !/\s/.test(prompt.value[end] ?? "\n");
+  const fragment = `${needsSpaceBefore ? " " : ""}${text}${needsSpaceAfter ? " " : ""}`;
+  prompt.setRangeText(fragment, start, end, "end");
   prompt.focus();
   resizePrompt();
   updateSendButton(snapshot);
