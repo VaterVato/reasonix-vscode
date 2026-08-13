@@ -26,7 +26,7 @@ Thumbs.db
 # Keep the packaged VSIX for easy installation
 !dist/
 !dist/reasonix-vscode.vsix
-!dist/extension.js
-!dist/extension.js.map
 dist/test/
+dist/extension.js
+dist/extension.js.map
 
