@@ -211,9 +211,10 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   private readonly snapshotSync = new SnapshotSync<ChatItem>();
   private snapshotTimer?: NodeJS.Timeout;
   private snapshotWorkspaceKey?: string;
-  private pendingMentions?: { id: number; attachments: PendingAttachment[]; offset?: number };
+  private pendingMentions: { id: number; attachments: PendingAttachment[]; offset?: number }[] = [];
   private nextMentionId = 1;
   private lastMentionAttemptAt = 0;
+  private mentionFlushTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -238,6 +239,10 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     if (this.snapshotTimer) {
       clearTimeout(this.snapshotTimer);
       this.snapshotTimer = undefined;
+    }
+    if (this.mentionFlushTimer) {
+      clearTimeout(this.mentionFlushTimer);
+      this.mentionFlushTimer = undefined;
     }
   }
 
@@ -489,32 +494,41 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   }
 
   /**
-   * Adds mention/attachment chips to the composer tray. The webview
-   * acknowledges with a mentionsApplied message; if the webview is not ready
-   * yet the chips are retried when it signals readiness (initial snapshot).
+   * Adds mention/attachment chips to the composer. Each batch is queued and
+   * acknowledged independently (mentionsApplied), so rapid successive
+   * additions never overwrite a pending batch; the webview dedupes by key.
    */
   private queueMentions(attachments: PendingAttachment[], offset?: number): void {
-    this.pendingMentions = { id: this.nextMentionId, attachments, offset };
+    this.pendingMentions.push({ id: this.nextMentionId, attachments, offset });
     this.nextMentionId += 1;
     this.flushPendingMentions();
   }
 
   private flushPendingMentions(): void {
-    if (!this.pendingMentions || !this.view) {
+    if (!this.view || this.pendingMentions.length === 0) {
       return;
     }
-    // Debounce so ack/snapshot bursts cannot retransmit the same batch.
+    // Debounce so ack/snapshot bursts cannot retransmit endlessly; a timer
+    // retries once the window passes.
     const now = Date.now();
     if (now - this.lastMentionAttemptAt < 300) {
+      if (this.mentionFlushTimer === undefined) {
+        this.mentionFlushTimer = setTimeout(() => {
+          this.mentionFlushTimer = undefined;
+          this.flushPendingMentions();
+        }, 300);
+      }
       return;
     }
     this.lastMentionAttemptAt = now;
-    void this.view.webview.postMessage({
-      type: "mentionsPicked",
-      id: this.pendingMentions.id,
-      attachments: this.pendingMentions.attachments,
-      ...(this.pendingMentions.offset !== undefined ? { offset: this.pendingMentions.offset } : {}),
-    });
+    for (const pending of this.pendingMentions) {
+      void this.view.webview.postMessage({
+        type: "mentionsPicked",
+        id: pending.id,
+        attachments: pending.attachments,
+        ...(pending.offset !== undefined ? { offset: pending.offset } : {}),
+      });
+    }
   }
 
   cancelTurn(): void {
@@ -897,9 +911,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         await this.handleFileDrop(message.uris, message.offset);
         return;
       case "mentionsApplied":
-        if (this.pendingMentions?.id === message.id) {
-          this.pendingMentions = undefined;
-        }
+        this.pendingMentions = this.pendingMentions.filter((pending) => pending.id !== message.id);
         return;
       case "sendPrompt":
         const activeFolder = this.currentWorkspaceFolder();

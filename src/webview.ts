@@ -311,7 +311,9 @@ function insertPromptFragments(fragments: PromptFragment[], start: number, end: 
   range.setEnd(endPos.container, endPos.offset);
   range.deleteContents();
 
-  let cursor = { container: startPos.container, offset: startPos.offset };
+  // deleteContents() collapses the range to the deletion point, which stays
+  // valid even when the original containers were removed entirely.
+  let cursor = { container: range.startContainer, offset: range.startOffset };
   for (const fragment of fragments) {
     const node = fragment.kind === "chip"
       ? renderMentionChip(fragment.index)
