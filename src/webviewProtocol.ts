@@ -163,7 +163,11 @@ function parseFileDropUris(value: unknown): Extract<WebviewToHostMessage, { comm
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_FILE_DROP_URIS) {
     return undefined;
   }
-  const uris = value.filter((item): item is string => typeof item === "string" && item.startsWith("file:") && item.length <= MAX_DROP_URI_LENGTH);
+  const uris = value.filter((item): item is string =>
+    typeof item === "string"
+    && (item.startsWith("file:") || item.startsWith("vscode-remote:"))
+    && item.length <= MAX_DROP_URI_LENGTH
+  );
   return uris.length === value.length ? { command: "fileDrop", uris } : undefined;
 }
 

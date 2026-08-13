@@ -521,52 +521,69 @@ sessionRailList.addEventListener("click", handleSessionClick);
 
 // Drag and drop from the VS Code explorer (or the system file manager) into
 // the webview. VS Code synthesizes HTML5 drag events carrying the dropped
-// resources as URIs, which we forward to the host for resolution.
-const URI_LIST_MIME = "text/uri-list";
-const RESOURCE_LIST_MIME = "application/vnd.code.resources";
+// resources under the "resourceurls" / "codeeditors" DataTransfer types,
+// which we forward to the host for resolution.
+// NOTE: VS Code 1.91+ requires holding Shift while dragging into a webview.
+const DRAG_MIME_TYPES = ["resourceurls", "codeeditors", "text/uri-list", "application/vnd.code.resources"] as const;
+
+function extractUriStrings(raw: string): string[] {
+  // Line-based format (e.g. text/uri-list style).
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.every((line) => line.startsWith("file:") || line.startsWith("vscode-remote:") || line.startsWith("vscode-webview:"))) {
+    return lines;
+  }
+  // JSON array format: strings or objects with a resource/uri field.
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const uris: string[] = [];
+      for (const item of parsed) {
+        if (typeof item === "string") {
+          uris.push(item);
+          continue;
+        }
+        if (item && typeof item === "object") {
+          const candidate = (item as Record<string, unknown>).resource ?? (item as Record<string, unknown>).uri;
+          if (typeof candidate === "string") {
+            uris.push(candidate);
+          }
+        }
+      }
+      if (uris.length > 0) {
+        return uris;
+      }
+    }
+  } catch {
+    // Not JSON; fall through.
+  }
+  return [];
+}
 
 function droppedResourceUris(event: DragEvent): string[] {
   const data = event.dataTransfer;
   if (!data) {
     return [];
   }
-  const uris: string[] = [];
   try {
-    const uriList = data.getData(URI_LIST_MIME);
-    if (uriList) {
-      for (const line of uriList.split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          uris.push(trimmed);
-        }
+    for (const mime of DRAG_MIME_TYPES) {
+      const raw = data.getData(mime);
+      if (!raw) {
+        continue;
       }
-      return uris;
-    }
-    const resourceList = data.getData(RESOURCE_LIST_MIME);
-    if (resourceList) {
-      const parsed: unknown = JSON.parse(resourceList);
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          const value = typeof item === "string"
-            ? item
-            : typeof (item as { uri?: { toString(): string } } | null | undefined)?.uri?.toString?.() === "string"
-              ? (item as { uri: { toString(): string } }).uri.toString()
-              : "";
-          if (value) {
-            uris.push(value);
-          }
-        }
+      const uris = extractUriStrings(raw);
+      if (uris.length > 0) {
+        return uris;
       }
     }
   } catch {
     // Ignore unreadable or malformed drag payloads.
   }
-  return uris;
+  return [];
 }
 
 function isResourceDrag(event: DragEvent): boolean {
-  const types = Array.from(event.dataTransfer?.types ?? []);
-  return types.some((type) => type === URI_LIST_MIME || type === RESOURCE_LIST_MIME || type.toLowerCase() === "files");
+  const types = Array.from(event.dataTransfer?.types ?? []).map((type) => type.toLowerCase());
+  return types.some((type) => DRAG_MIME_TYPES.some((mime) => mime === type) || type === "files");
 }
 
 document.addEventListener("dragover", (event) => {
@@ -3473,7 +3490,7 @@ const labels: Record<"en" | "zh", Record<LabelKey, string>> = {
     placeholder: "Message Reasonix...",
     plan: "Plan",
     planDetail: "Read first, produce a plan, and wait before side effects.",
-    composerHint: "/ commands · @ files/folders",
+    composerHint: "/ commands · @ files/folders · Shift+drag files",
     pathPlaceholder: "Resolve from PATH",
     pickModel: "Pick model",
     read: "read",
@@ -3631,7 +3648,7 @@ const labels: Record<"en" | "zh", Record<LabelKey, string>> = {
     placeholder: "给 Reasonix 发消息...",
     plan: "计划",
     planDetail: "先只读分析并产出计划，确认前避免副作用。",
-    composerHint: "/ 命令 · @ 文件/文件夹",
+    composerHint: "/ 命令 · @ 文件/文件夹 · Shift+拖入文件",
     pathPlaceholder: "从 PATH 查找",
     pickModel: "选择模型",
     read: "读取",

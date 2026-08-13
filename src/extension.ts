@@ -339,7 +339,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
    */
   async addToChat(uri?: vscode.Uri): Promise<void> {
     const resolved = uri ?? vscode.window.activeTextEditor?.document.uri;
-    if (!resolved || resolved.scheme !== "file") {
+    if (!resolved || !isFileResourceUri(resolved)) {
       void vscode.window.showInformationMessage("Add to Reasonix Chat works with workspace files and folders.");
       return;
     }
@@ -416,7 +416,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       } catch {
         continue;
       }
-      if (uri.scheme !== "file") {
+      if (!isFileResourceUri(uri)) {
         continue;
       }
       let stat: vscode.FileStat;
@@ -2407,6 +2407,11 @@ async function selectReasonixBinary(): Promise<string | undefined> {
 
 function workspaceKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
+}
+
+/** File-backed resources, including remote workspaces (vscode-remote scheme). */
+function isFileResourceUri(uri: vscode.Uri): boolean {
+  return uri.scheme === "file" || uri.scheme === "vscode-remote";
 }
 
 /**
