@@ -204,8 +204,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   private readonly snapshotSync = new SnapshotSync<ChatItem>();
   private snapshotTimer?: NodeJS.Timeout;
   private snapshotWorkspaceKey?: string;
-  private pendingInsert?: { id: number; text: string };
-  private nextInsertId = 1;
+  private pendingMentions?: { id: number; attachments: PendingAttachment[] };
+  private nextMentionId = 1;
+  private lastMentionAttemptAt = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -361,7 +362,13 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         void vscode.window.showInformationMessage("Directories can only be referenced inside the workspace.");
         return;
       }
-      this.queueInsert(`@${mentionTokenForPath(relative, true)} `);
+      this.queueMentions([{
+        kind: "mention",
+        name: relative === "" ? "./" : `${path.posix.basename(relative)}/`,
+        relativePath: relative,
+        uri: resolved.toString(),
+        isDirectory: true,
+      }]);
       return;
     }
 
@@ -377,38 +384,43 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 
     if (!insideWorkspace) {
       // Outside the workspace @ mentions cannot resolve, so attach the content instead.
-      const attachment: PendingAttachment = {
+      this.queueMentions([{
         kind: "file",
         name: path.basename(resolved.fsPath),
         uri: resolved.fsPath,
         mimeType: mimeFromFileName(resolved.fsPath),
-      };
-      if (this.view) {
-        void this.view.webview.postMessage({ type: "attachmentsPicked", attachments: [attachment] });
-      } else {
-        void vscode.window.showInformationMessage("Open the Reasonix chat view first to attach this file.");
-      }
+      }]);
       return;
     }
 
-    const mention = `@${mentionTokenForPath(relative, false)}`;
     if (!selection) {
-      this.queueInsert(`${mention} `);
+      this.queueMentions([{
+        kind: "mention",
+        name: path.posix.basename(relative),
+        relativePath: relative,
+        uri: resolved.toString(),
+      }]);
       return;
     }
-    const header = `Selected lines ${selection.startLine}-${selection.endLine} from ${relative}:`;
-    const fence = "```";
-    this.queueInsert(`${mention}\n${header}\n${fence}${selection.languageId}\n${selection.text}\n${fence}\n`);
+    this.queueMentions([{
+      kind: "mention",
+      name: `${path.posix.basename(relative)} L${selection.startLine}-${selection.endLine}`,
+      relativePath: relative,
+      uri: resolved.toString(),
+      text: selection.text,
+      startLine: selection.startLine,
+      endLine: selection.endLine,
+      languageId: selection.languageId,
+    }]);
   }
 
   /**
    * Handles file/folder URIs dropped onto the webview. Directories and text
-   * files become @ mentions; images are attached by content.
+   * files become mention chips; images are attached by content.
    */
   private async handleFileDrop(uris: string[]): Promise<void> {
     const folder = this.currentWorkspaceFolder();
-    const mentions: string[] = [];
-    const attachments: PendingAttachment[] = [];
+    const pending: PendingAttachment[] = [];
     for (const raw of uris) {
       let uri: vscode.Uri;
       try {
@@ -429,44 +441,62 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       const insideWorkspace = relative !== undefined && (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)));
       if (stat.type === vscode.FileType.Directory) {
         if (insideWorkspace) {
-          mentions.push(`@${mentionTokenForPath(relative, true)}`);
+          pending.push({
+            kind: "mention",
+            name: relative === "" ? "./" : `${path.posix.basename(relative)}/`,
+            relativePath: relative,
+            uri: uri.toString(),
+            isDirectory: true,
+          });
         }
         continue;
       }
       if (isImageMime(mimeFromFileName(uri.fsPath))) {
-        attachments.push({ kind: "image", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
+        pending.push({ kind: "image", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
         continue;
       }
       if (insideWorkspace) {
-        mentions.push(`@${mentionTokenForPath(relative, false)}`);
+        pending.push({
+          kind: "mention",
+          name: path.posix.basename(relative),
+          relativePath: relative,
+          uri: uri.toString(),
+        });
       } else {
-        attachments.push({ kind: "file", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
+        pending.push({ kind: "file", name: path.basename(uri.fsPath), uri: uri.fsPath, mimeType: mimeFromFileName(uri.fsPath) });
       }
     }
-    if (attachments.length > 0 && this.view) {
-      void this.view.webview.postMessage({ type: "attachmentsPicked", attachments });
-    }
-    if (mentions.length > 0) {
-      this.queueInsert(`${mentions.join(" ")} `);
+    if (pending.length > 0) {
+      this.queueMentions(pending);
     }
   }
 
   /**
-   * Inserts text into the composer at the caret. The webview acknowledges with
-   * an insertApplied message; if the webview is not ready yet the insert is
-   * retried whenever a webview message arrives (e.g. the initial snapshot).
+   * Adds mention/attachment chips to the composer tray. The webview
+   * acknowledges with a mentionsApplied message; if the webview is not ready
+   * yet the chips are retried when it signals readiness (initial snapshot).
    */
-  private queueInsert(text: string): void {
-    this.pendingInsert = { id: this.nextInsertId, text };
-    this.nextInsertId += 1;
-    this.flushPendingInsert();
+  private queueMentions(attachments: PendingAttachment[]): void {
+    this.pendingMentions = { id: this.nextMentionId, attachments };
+    this.nextMentionId += 1;
+    this.flushPendingMentions();
   }
 
-  private flushPendingInsert(): void {
-    if (!this.pendingInsert || !this.view) {
+  private flushPendingMentions(): void {
+    if (!this.pendingMentions || !this.view) {
       return;
     }
-    void this.view.webview.postMessage({ type: "insertAtCursor", id: this.pendingInsert.id, text: this.pendingInsert.text });
+    // Debounce so ack/snapshot bursts cannot retransmit the same batch.
+    const now = Date.now();
+    if (now - this.lastMentionAttemptAt < 300) {
+      return;
+    }
+    this.lastMentionAttemptAt = now;
+    void this.view.webview.postMessage({
+      type: "mentionsPicked",
+      id: this.pendingMentions.id,
+      attachments: this.pendingMentions.attachments,
+    });
   }
 
   cancelTurn(): void {
@@ -839,7 +869,6 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   }
 
   private async handleWebviewMessage(raw: unknown): Promise<void> {
-    this.flushPendingInsert();
     const message = parseWebviewMessage(raw);
     if (!message) {
       this.appendOutput(`Ignored invalid webview message: ${JSON.stringify(raw)}`);
@@ -849,9 +878,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       case "fileDrop":
         await this.handleFileDrop(message.uris);
         return;
-      case "insertApplied":
-        if (this.pendingInsert?.id === message.id) {
-          this.pendingInsert = undefined;
+      case "mentionsApplied":
+        if (this.pendingMentions?.id === message.id) {
+          this.pendingMentions = undefined;
         }
         return;
       case "sendPrompt":
@@ -959,6 +988,9 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         await this.postResourceSuggestions(message.requestId, message.query);
         return;
       case "stateSnapshot":
+        // The webview just became ready (initial load or visibility change);
+        // retry any mention chips that were queued before it could receive messages.
+        this.flushPendingMentions();
         this.snapshotSync.requireFullSnapshot();
         this.postSnapshot(undefined, true);
         return;
@@ -1324,13 +1356,25 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
         this.sessionModeId(state, "goal") !== undefined,
         this.workModeOption(state) !== undefined,
       );
-      const withMentions = await buildPromptBlocks(providerPrompt, folder.uri.fsPath);
-      let blocks: ContentBlock[] | undefined = withMentions.blocks;
-      if (attachments.length > 0) {
+      const mentionAttachments = attachments.filter((attachment) => attachment.kind === "mention");
+      const plainAttachments = attachments.filter((attachment) => attachment.kind !== "mention");
+      const selectionBlocks: ContentBlock[] = [];
+      const mentionTokens: string[] = [];
+      for (const mention of mentionAttachments) {
+        if (mention.text !== undefined) {
+          selectionBlocks.push(selectionMentionBlock(mention, folder));
+        } else if (mention.relativePath !== undefined) {
+          mentionTokens.push(`@${mentionTokenForPath(mention.relativePath, mention.isDirectory === true)}`);
+        }
+      }
+      const mentionSuffix = mentionTokens.length > 0 ? `\n${mentionTokens.join(" ")}` : "";
+      const withMentions = await buildPromptBlocks(`${providerPrompt}${mentionSuffix}`, folder.uri.fsPath);
+      let blocks: ContentBlock[] | undefined = [...withMentions.blocks, ...selectionBlocks];
+      if (plainAttachments.length > 0) {
         try {
           const readFile = async (uri: string) => vscode.workspace.fs.readFile(vscode.Uri.parse(uri));
           const attachmentBlocks: ContentBlock[] = [];
-          for (const attachment of attachments.slice(0, MAX_ATTACHMENTS)) {
+          for (const attachment of plainAttachments.slice(0, MAX_ATTACHMENTS)) {
             attachmentBlocks.push(await attachmentToBlock(attachment, readFile));
           }
           blocks = [...blocks, ...attachmentBlocks];
@@ -2412,6 +2456,23 @@ function workspaceKey(folder: vscode.WorkspaceFolder): string {
 /** File-backed resources, including remote workspaces (vscode-remote scheme). */
 function isFileResourceUri(uri: vscode.Uri): boolean {
   return uri.scheme === "file" || uri.scheme === "vscode-remote";
+}
+
+/** Builds a resource block for a mention that carries a code selection. */
+function selectionMentionBlock(mention: PendingAttachment, folder: vscode.WorkspaceFolder): ContentBlock {
+  const relative = mention.relativePath ?? mention.name;
+  const startLine = mention.startLine;
+  const endLine = mention.endLine ?? startLine;
+  const range = startLine !== undefined && endLine !== undefined ? ` lines ${startLine}-${endLine}` : "";
+  const baseUri = mention.uri ?? vscode.Uri.joinPath(folder.uri, relative).toString();
+  return {
+    type: "resource",
+    resource: {
+      uri: startLine !== undefined ? `${baseUri}#L${startLine}-L${endLine}` : baseUri,
+      mimeType: "text/plain",
+      text: `VS Code selection: ${relative}${range}\nLanguage: ${mention.languageId ?? ""}\n${mention.text ?? ""}`,
+    },
+  };
 }
 
 function emptyState(): WorkspaceChatState {

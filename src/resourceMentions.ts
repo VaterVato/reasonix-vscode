@@ -25,27 +25,40 @@ const maxTokenLength = 240;
 const MENTION_TOKEN_BREAKERS = /[\s"')\]}>;,:]|%/;
 
 /**
- * Builds a human-readable @ mention token for a workspace-relative path.
- * Only token-breaking characters are percent-encoded; CJK and other
- * non-ASCII characters stay readable in the composer. The workspace root
- * itself and extensionless root-level files get a "./" prefix so the
- * resolver accepts them.
+ * Builds a readable @ mention token for a workspace-relative path. Paths
+ * containing characters that would break the mention token grammar
+ * (whitespace, quotes, brackets, "%") are wrapped in double (or single)
+ * quotes so they stay fully human-readable in the composer. Percent
+ * encoding is only a last resort for paths containing every quote style.
+ * The workspace root itself and extensionless root-level files get a
+ * "./" prefix so the resolver accepts them.
  */
 export function mentionTokenForPath(relativePath: string, isDirectory: boolean): string {
   if (relativePath === "") {
     return "./"; // workspace root directory listing
   }
-  const encoded = relativePath
-    .split("/")
-    .map((segment) =>
-      segment
-        .split("")
-        .map((ch) => (MENTION_TOKEN_BREAKERS.test(ch) ? percentEncodeChar(ch) : ch))
-        .join("")
-    )
-    .join("/");
-  const token = relativePath.includes("/") || relativePath.includes(".") ? encoded : `./${encoded}`;
-  return isDirectory ? `${token}/` : token;
+  const base = relativePath.includes("/") || relativePath.includes(".") ? relativePath : `./${relativePath}`;
+  const path = isDirectory ? `${base}/` : base;
+  if (!MENTION_TOKEN_BREAKERS.test(path)) {
+    return path;
+  }
+  if (path.includes("%")) {
+    return percentEncodeToken(path);
+  }
+  if (!path.includes('"')) {
+    return `"${path}"`;
+  }
+  if (!path.includes("'")) {
+    return `'${path}'`;
+  }
+  return percentEncodeToken(path);
+}
+
+function percentEncodeToken(path: string): string {
+  return path
+    .split("")
+    .map((ch) => (MENTION_TOKEN_BREAKERS.test(ch) ? percentEncodeChar(ch) : ch))
+    .join("");
 }
 
 /**
@@ -145,10 +158,12 @@ export async function resolveFileMentions(prompt: string, workspacePath: string)
 
 function extractMentionTokens(prompt: string): string[] {
   const tokens: string[] = [];
-  const pattern = /(^|[\s([{])@([^\s)\]}>,;:"']+)/g;
+  const pattern = /(^|[\s([{])@(?:"([^"\n]{1,240})"|'([^'\n]{1,240})'|([^\s)\]}>,;:"']+))/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(prompt)) !== null) {
-    const token = stripTrailingPunctuation(match[2] ?? "");
+    const quoted = match[2] ?? match[3];
+    const raw = quoted ?? match[4] ?? "";
+    const token = quoted ? raw : stripTrailingPunctuation(raw);
     if (token.length > 0 && token.length <= maxTokenLength) {
       tokens.push(token);
     }

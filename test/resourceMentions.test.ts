@@ -13,11 +13,13 @@ test("mentionTokenForPath keeps non-ASCII paths readable", () => {
   assert.equal(mentionTokenForPath("README", false), "./README");
 });
 
-test("mentionTokenForPath encodes only token-breaking characters", () => {
-  assert.equal(mentionTokenForPath("a b/c d.txt", false), "a%20b/c%20d.txt");
-  assert.equal(mentionTokenForPath("Jim Carrey's cut (final).txt", false), "Jim%20Carrey%27s%20cut%20(final%29.txt");
+test("mentionTokenForPath quotes only token-breaking characters", () => {
+  assert.equal(mentionTokenForPath("a b/c d.txt", false), "\"a b/c d.txt\"");
+  assert.equal(mentionTokenForPath("Jim Carrey's cut (final).txt", false), "\"Jim Carrey's cut (final).txt\"");
+  assert.equal(mentionTokenForPath("a\"b.txt", false), "'a\"b.txt'");
+  // "%" cannot survive decodeURIComponent verbatim, so it falls back to percent encoding.
   assert.equal(mentionTokenForPath("100% done.txt", false), "100%25%20done.txt");
-  assert.equal(mentionTokenForPath("明星合集类/旁白分析/Jim Carrey Crashes Jeff Daniels' CONAN Interview.srt", false), "明星合集类/旁白分析/Jim%20Carrey%20Crashes%20Jeff%20Daniels%27%20CONAN%20Interview.srt");
+  assert.equal(mentionTokenForPath("明星合集类/旁白分析/Jim Carrey Crashes Jeff Daniels' CONAN Interview.srt", false), "\"明星合集类/旁白分析/Jim Carrey Crashes Jeff Daniels' CONAN Interview.srt\"");
 });
 
 test("mentionTokenForPath tokens resolve back to the original path", async () => {
@@ -26,12 +28,23 @@ test("mentionTokenForPath tokens resolve back to the original path", async () =>
   await fs.writeFile(path.join(workspace, "明星合集类", "a b.txt"), "hello\n");
 
   const token = mentionTokenForPath("明星合集类/a b.txt", false);
-  assert.equal(token, "明星合集类/a%20b.txt");
+  assert.equal(token, "\"明星合集类/a b.txt\"");
 
   const mentions = await resolveFileMentions(`check @${token}`, workspace);
   assert.equal(mentions.length, 1);
   assert.equal(mentions[0].relativePath, "明星合集类/a b.txt");
   assert.match(mentions[0].text, /hello/);
+});
+
+test("resolveFileMentions resolves quoted tokens with quotes inside", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "reasonix-mentions-"));
+  await fs.mkdir(path.join(workspace, "src"), { recursive: true });
+  await fs.writeFile(path.join(workspace, "src", "Jim's file.txt"), "quoted content\n");
+
+  const mentions = await resolveFileMentions("check @\"src/Jim's file.txt\"", workspace);
+  assert.equal(mentions.length, 1);
+  assert.equal(mentions[0].relativePath, "src/Jim's file.txt");
+  assert.match(mentions[0].text, /quoted content/);
 });
 
 test("resolveFileMentions reads workspace-relative @ file references", async () => {

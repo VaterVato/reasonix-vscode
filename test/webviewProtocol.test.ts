@@ -82,13 +82,13 @@ test("parseWebviewMessage rejects malformed file drops", () => {
   assert.equal(parseWebviewMessage({ command: "fileDrop" }), undefined);
 });
 
-test("parseWebviewMessage accepts insertApplied acks", () => {
-  assert.deepEqual(parseWebviewMessage({ command: "insertApplied", id: 3 }), {
-    command: "insertApplied",
+test("parseWebviewMessage accepts mentionsApplied acks", () => {
+  assert.deepEqual(parseWebviewMessage({ command: "mentionsApplied", id: 3 }), {
+    command: "mentionsApplied",
     id: 3,
   });
-  assert.equal(parseWebviewMessage({ command: "insertApplied", id: -1 }), undefined);
-  assert.equal(parseWebviewMessage({ command: "insertApplied" }), undefined);
+  assert.equal(parseWebviewMessage({ command: "mentionsApplied", id: -1 }), undefined);
+  assert.equal(parseWebviewMessage({ command: "mentionsApplied" }), undefined);
 });
 
 test("parseWebviewMessage accepts product UI commands", () => {

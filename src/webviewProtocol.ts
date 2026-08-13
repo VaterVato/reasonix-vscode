@@ -41,7 +41,7 @@ export type WebviewToHostMessage =
   | { command: "approvalDecision"; id: string; optionId: string }
   | { command: "resourceSuggestions"; requestId: number; query: string }
   | { command: "fileDrop"; uris: string[] }
-  | { command: "insertApplied"; id: number }
+  | { command: "mentionsApplied"; id: number }
   | { command: "stateSnapshot" };
 
 type SettingKey = "binaryPath" | "model" | "uiLanguage" | "autoStart" | "trace" | "includeSelectionMode";
@@ -59,7 +59,7 @@ export type HostToWebviewMessage =
     }
   | { type: "resourceSuggestions"; requestId: number; query: string; items: ResourceSuggestion[] }
   | { type: "attachmentsPicked"; attachments: PendingAttachment[] }
-  | { type: "insertAtCursor"; id: number; text: string }
+  | { type: "mentionsPicked"; id: number; attachments: PendingAttachment[] }
   | { type: "openSettings" };
 
 export function parseWebviewMessage(value: unknown): WebviewToHostMessage | undefined {
@@ -149,8 +149,8 @@ export function parseWebviewMessage(value: unknown): WebviewToHostMessage | unde
         : undefined;
     case "fileDrop":
       return parseFileDropUris(value.uris);
-    case "insertApplied":
-      return isValidIndex(value.id) ? { command: "insertApplied", id: value.id } : undefined;
+    case "mentionsApplied":
+      return isValidIndex(value.id) ? { command: "mentionsApplied", id: value.id } : undefined;
     default:
       return undefined;
   }

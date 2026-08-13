@@ -467,13 +467,18 @@ contextMenu.addEventListener("keydown", (event) => {
 attachmentTray.addEventListener("click", (event) => {
   const button = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-remove-attachment]");
   const index = Number(button?.dataset.removeAttachment);
-  if (Number.isInteger(index) && index >= 0 && index < pendingAttachments.length) {
-    pendingAttachments.splice(index, 1);
-    renderAttachmentTray();
-    updateSendButton(snapshot);
-    focusPromptSoon();
-  }
+  removeAttachmentByIndex(index);
 });
+
+function removeAttachmentByIndex(index: number): void {
+  if (!Number.isInteger(index) || index < 0 || index >= pendingAttachments.length) {
+    return;
+  }
+  pendingAttachments.splice(index, 1);
+  renderAttachmentTray();
+  updateSendButton(snapshot);
+  focusPromptSoon();
+}
 
 approvalModebar.addEventListener("click", (event) => {
   const mode = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-tool-approval-mode]")?.dataset.toolApprovalMode;
@@ -853,9 +858,10 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
       addAttachments(message.attachments);
       focusPromptSoon();
       return;
-    case "insertAtCursor":
-      insertPromptText(message.text);
-      vscode.postMessage({ command: "insertApplied", id: message.id });
+    case "mentionsPicked":
+      addAttachments(message.attachments);
+      focusPromptSoon();
+      vscode.postMessage({ command: "mentionsApplied", id: message.id });
       return;
     case "resourceSuggestions":
       receiveResourceSuggestions(message.requestId, message.query, message.items);
@@ -1105,24 +1111,6 @@ function insertComposerTrigger(token: "@" | "/"): void {
   const end = prompt.selectionEnd;
   const needsSpace = start > 0 && !/\s/.test(prompt.value[start - 1] ?? "");
   prompt.setRangeText(`${needsSpace ? " " : ""}${token}`, start, end, "end");
-  prompt.focus();
-  resizePrompt();
-  updateSendButton(snapshot);
-  updateComposerSuggestions();
-  schedulePersistedState();
-}
-
-/** Inserts text at the composer caret (replacing any selection). */
-function insertPromptText(text: string): void {
-  if (text.length === 0) {
-    return;
-  }
-  const start = prompt.selectionStart;
-  const end = prompt.selectionEnd;
-  const needsSpaceBefore = start > 0 && !/\s/.test(prompt.value[start - 1] ?? "");
-  const needsSpaceAfter = !/\s/.test(prompt.value[end] ?? "\n");
-  const fragment = `${needsSpaceBefore ? " " : ""}${text}${needsSpaceAfter ? " " : ""}`;
-  prompt.setRangeText(fragment, start, end, "end");
   prompt.focus();
   resizePrompt();
   updateSendButton(snapshot);
@@ -1743,10 +1731,15 @@ function renderAttachmentTray(): void {
   pendingAttachments.forEach((attachment, index) => {
     const chip = document.createElement("span");
     chip.className = `attachment-chip attachment-chip--${attachment.kind}`;
-    chip.title = attachment.name;
+    chip.tabIndex = 0;
+    const detail = attachment.kind === "mention"
+      ? `${attachment.relativePath ?? attachment.name}${attachment.startLine !== undefined && attachment.endLine !== undefined ? ` (lines ${attachment.startLine}-${attachment.endLine})` : ""}`
+      : attachment.name;
+    chip.title = detail;
+    chip.setAttribute("aria-label", `${detail} — ${label("removeAttachment")}`);
     const icon = document.createElement("span");
     icon.className = "attachment-chip__icon";
-    icon.textContent = attachment.kind === "session" ? "#" : attachment.kind === "image" ? "▦" : "≡";
+    icon.textContent = attachment.kind === "session" ? "#" : attachment.kind === "image" ? "▦" : attachment.kind === "mention" && attachment.isDirectory ? "🗀" : "≡";
     icon.setAttribute("aria-hidden", "true");
     const name = document.createElement("span");
     name.className = "attachment-chip__name";
@@ -1756,9 +1749,15 @@ function renderAttachmentTray(): void {
     remove.className = "attachment-chip__remove";
     remove.dataset.removeAttachment = String(index);
     remove.title = label("removeAttachment");
-    remove.setAttribute("aria-label", `${label("removeAttachment")}: ${attachment.name}`);
+    remove.setAttribute("aria-label", `${label("removeAttachment")}: ${detail}`);
     remove.textContent = "×";
     chip.append(icon, name, remove);
+    chip.addEventListener("keydown", (event) => {
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        removeAttachmentByIndex(index);
+      }
+    });
     attachmentTray.append(chip);
   });
   attachmentTray.hidden = pendingAttachments.length === 0;
