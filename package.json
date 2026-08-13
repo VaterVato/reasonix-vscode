@@ -150,7 +150,12 @@
         "reasonix.cnyPerUsd": {
           "type": "number",
           "default": 7.2,
-          "description": "USD to CNY conversion rate used to display usage costs in RMB."
+          "description": "USD to CNY conversion rate used to display usage costs in RMB (fallback when automatic refresh is disabled or fails)."
+        },
+        "reasonix.cnyPerUsdAuto": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the USD to CNY rate automatically on startup (once per day) from a free exchange-rate API."
         }
       }
     },

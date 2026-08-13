@@ -169,7 +169,8 @@ export function activate(context: vscode.ExtensionContext): void {
         event.affectsConfiguration("reasonix.binaryPath") ||
         event.affectsConfiguration("reasonix.autoStart") ||
         event.affectsConfiguration("reasonix.trace") ||
-        event.affectsConfiguration("reasonix.cnyPerUsd")
+        event.affectsConfiguration("reasonix.cnyPerUsd") ||
+        event.affectsConfiguration("reasonix.cnyPerUsdAuto")
       ) {
         provider.refreshActiveWorkspace();
       }
@@ -188,6 +189,10 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
       vscode.commands.registerCommand("reasonix.test.snapshot", () => provider.testSnapshot()),
     );
+  }
+  // Refresh the USD→CNY rate once per day on startup (no network in tests).
+  if (process.env.REASONIX_TEST_COMMANDS !== "1") {
+    void refreshCnyRate(context, output).then(() => provider.refreshActiveWorkspace());
   }
   provider.refreshActiveWorkspace();
 }
@@ -278,6 +283,16 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
 
   refreshActiveWorkspace(): void {
     this.postSnapshot();
+  }
+
+  /** Prefers today's auto-refreshed rate, falling back to the setting. */
+  private cnyPerUsd(): number {
+    const value = this.context.globalState.get<number>(CNY_RATE_STORAGE_KEY);
+    const date = this.context.globalState.get<string>(CNY_RATE_DATE_KEY);
+    if (date === todayKey() && typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+    return configuredCnyPerUsd();
   }
 
   async newSession(): Promise<void> {
@@ -1950,7 +1965,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       uiLanguage: configuredUiLanguage(),
       settings: currentSettings(),
       sessions: folder ? (state.sessions ?? this.sessionHistory(folder)) : [],
-      cnyPerUsd: configuredCnyPerUsd(),
+      cnyPerUsd: this.cnyPerUsd(),
     };
     const { items, ...viewState } = snapshot;
     this.updateStatusBar(folder);
@@ -2504,6 +2519,51 @@ function configuredUiLanguage(): UiLanguage {
 function configuredCnyPerUsd(): number {
   const value = vscode.workspace.getConfiguration("reasonix").get<number>("cnyPerUsd", 7.2);
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 7.2;
+}
+
+const CNY_RATE_API_URL = "https://open.er-api.com/v6/latest/USD";
+const CNY_RATE_STORAGE_KEY = "reasonix.cnyRate.value";
+const CNY_RATE_DATE_KEY = "reasonix.cnyRate.date";
+
+function todayKey(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Fetches the current USD→CNY rate once per day and stores it in globalState.
+ * Failures are logged and the configured fallback rate keeps being used.
+ */
+async function refreshCnyRate(context: vscode.ExtensionContext, output: vscode.OutputChannel): Promise<void> {
+  const enabled = vscode.workspace.getConfiguration("reasonix").get<boolean>("cnyPerUsdAuto", true);
+  if (!enabled) {
+    return;
+  }
+  const today = todayKey();
+  if (context.globalState.get<string>(CNY_RATE_DATE_KEY) === today) {
+    return; // Already refreshed today.
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    const response = await fetch(CNY_RATE_API_URL, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = (await response.json()) as { rates?: { CNY?: unknown } };
+    const rate = payload?.rates?.CNY;
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 3 || rate > 20) {
+      throw new Error(`unexpected rate: ${String(rate)}`);
+    }
+    await context.globalState.update(CNY_RATE_STORAGE_KEY, rate);
+    await context.globalState.update(CNY_RATE_DATE_KEY, today);
+    output.appendLine(`USD→CNY rate updated to ${rate} (valid for ${today})`);
+  } catch (err) {
+    output.appendLine(`USD→CNY rate refresh failed (using configured fallback): ${errorMessage(err)}`);
+  }
 }
 
 function effectiveUiLocale(): string {
