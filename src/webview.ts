@@ -1255,33 +1255,45 @@ function patchTranscript(patch: TranscriptSplice<ChatItem>, oldLength: number, w
   }
 
   // Preserve open state and scroll position of reasoning bodies that are
-  // about to be re-rendered by the streaming patch.
-  const preservedThoughts = new Map<number, { open: boolean; scrollTop: number }>();
+  // about to be re-rendered by the streaming patch. Bodies that were at the
+  // bottom (or are brand new) keep following the stream; bodies the user
+  // scrolled up stay put until they scroll back down.
+  const removedIndexes: number[] = [];
+  const preservedThoughts = new Map<number, { open: boolean; scrollTop: number; followBottom: boolean }>();
   for (const node of Array.from(transcript.querySelectorAll<HTMLElement>("[data-transcript-item]"))) {
     const index = Number(node.dataset.itemIndex);
-    if (!Number.isInteger(index) || index >= patch.start || index < renderedTranscriptStart) {
-      if (Number.isInteger(index) && index >= patch.start) {
-        const details = node.querySelector<HTMLDetailsElement>("details.thought-details");
-        const body = node.querySelector<HTMLElement>(".thought-scroll-body");
-        if (details) {
-          preservedThoughts.set(index, { open: details.open, scrollTop: body?.scrollTop ?? 0 });
-        }
+    if (Number.isInteger(index) && index >= patch.start) {
+      removedIndexes.push(index);
+      const details = node.querySelector<HTMLDetailsElement>("details.thought-details");
+      const body = node.querySelector<HTMLElement>(".thought-scroll-body");
+      if (details) {
+        const followBottom = body ? body.scrollHeight - body.scrollTop - body.clientHeight < 8 : true;
+        preservedThoughts.set(index, { open: details.open, scrollTop: body?.scrollTop ?? 0, followBottom });
       }
+    }
+    if (!Number.isInteger(index) || index >= patch.start || index < renderedTranscriptStart) {
       node.remove();
     }
   }
   for (let index = Math.max(patch.start, renderedTranscriptStart); index < snapshot.items.length; index += 1) {
     transcript.append(renderItem(snapshot.items[index], index));
   }
-  for (const [index, state] of preservedThoughts) {
+  for (const index of removedIndexes) {
     const node = transcript.querySelector<HTMLElement>(`[data-transcript-item][data-item-index="${index}"]`);
     const details = node?.querySelector<HTMLDetailsElement>("details.thought-details");
     const body = node?.querySelector<HTMLElement>(".thought-scroll-body");
-    if (details) {
-      details.open = state.open;
+    if (!details) {
+      continue;
     }
+    const preserved = preservedThoughts.get(index);
+    details.open = preserved?.open ?? true;
     if (body) {
-      body.scrollTop = state.scrollTop;
+      if (preserved?.followBottom ?? true) {
+        // Follow the stream: keep showing the newest content.
+        body.scrollTop = body.scrollHeight;
+      } else {
+        body.scrollTop = Math.min(preserved!.scrollTop, Math.max(0, body.scrollHeight - body.clientHeight));
+      }
     }
   }
   appendTranscriptHistoryControl();
