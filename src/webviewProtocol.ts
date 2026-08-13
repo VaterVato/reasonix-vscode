@@ -40,7 +40,7 @@ export type WebviewToHostMessage =
   | { command: "openToolLocation"; index: number; locationIndex: number }
   | { command: "approvalDecision"; id: string; optionId: string }
   | { command: "resourceSuggestions"; requestId: number; query: string }
-  | { command: "fileDrop"; uris: string[] }
+  | { command: "fileDrop"; uris: string[]; offset?: number }
   | { command: "mentionsApplied"; id: number }
   | { command: "stateSnapshot" };
 
@@ -59,7 +59,7 @@ export type HostToWebviewMessage =
     }
   | { type: "resourceSuggestions"; requestId: number; query: string; items: ResourceSuggestion[] }
   | { type: "attachmentsPicked"; attachments: PendingAttachment[] }
-  | { type: "mentionsPicked"; id: number; attachments: PendingAttachment[] }
+  | { type: "mentionsPicked"; id: number; attachments: PendingAttachment[]; offset?: number }
   | { type: "openSettings" };
 
 export function parseWebviewMessage(value: unknown): WebviewToHostMessage | undefined {
@@ -147,8 +147,20 @@ export function parseWebviewMessage(value: unknown): WebviewToHostMessage | unde
       return isValidIndex(value.requestId) && typeof value.query === "string" && value.query.length <= 240
         ? { command: "resourceSuggestions", requestId: value.requestId, query: value.query }
         : undefined;
-    case "fileDrop":
-      return parseFileDropUris(value.uris);
+    case "fileDrop": {
+      const message = parseFileDropUris(value.uris);
+      if (!message) {
+        return undefined;
+      }
+      const offset = value.offset;
+      if (offset !== undefined && offset !== null) {
+        if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0 || offset > 200_000) {
+          return undefined;
+        }
+        message.offset = offset;
+      }
+      return message;
+    }
     case "mentionsApplied":
       return isValidIndex(value.id) ? { command: "mentionsApplied", id: value.id } : undefined;
     default:

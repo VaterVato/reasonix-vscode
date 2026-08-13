@@ -71,6 +71,13 @@ test("parseWebviewMessage accepts valid file drops", () => {
     command: "fileDrop",
     uris: ["vscode-remote://ssh-remote+host/home/user/a.ts"],
   });
+  assert.deepEqual(parseWebviewMessage({ command: "fileDrop", uris: ["file:///E:/src/a.ts"], offset: 7 }), {
+    command: "fileDrop",
+    uris: ["file:///E:/src/a.ts"],
+    offset: 7,
+  });
+  assert.equal(parseWebviewMessage({ command: "fileDrop", uris: ["file:///E:/src/a.ts"], offset: -1 }), undefined);
+  assert.equal(parseWebviewMessage({ command: "fileDrop", uris: ["file:///E:/src/a.ts"], offset: 2.5 }), undefined);
 });
 
 test("parseWebviewMessage rejects malformed file drops", () => {

@@ -204,7 +204,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
   private readonly snapshotSync = new SnapshotSync<ChatItem>();
   private snapshotTimer?: NodeJS.Timeout;
   private snapshotWorkspaceKey?: string;
-  private pendingMentions?: { id: number; attachments: PendingAttachment[] };
+  private pendingMentions?: { id: number; attachments: PendingAttachment[]; offset?: number };
   private nextMentionId = 1;
   private lastMentionAttemptAt = 0;
 
@@ -418,7 +418,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
    * Handles file/folder URIs dropped onto the webview. Directories and text
    * files become mention chips; images are attached by content.
    */
-  private async handleFileDrop(uris: string[]): Promise<void> {
+  private async handleFileDrop(uris: string[], offset?: number): Promise<void> {
     const folder = this.currentWorkspaceFolder();
     const pending: PendingAttachment[] = [];
     for (const raw of uris) {
@@ -467,7 +467,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       }
     }
     if (pending.length > 0) {
-      this.queueMentions(pending);
+      this.queueMentions(pending, offset);
     }
   }
 
@@ -476,8 +476,8 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
    * acknowledges with a mentionsApplied message; if the webview is not ready
    * yet the chips are retried when it signals readiness (initial snapshot).
    */
-  private queueMentions(attachments: PendingAttachment[]): void {
-    this.pendingMentions = { id: this.nextMentionId, attachments };
+  private queueMentions(attachments: PendingAttachment[], offset?: number): void {
+    this.pendingMentions = { id: this.nextMentionId, attachments, offset };
     this.nextMentionId += 1;
     this.flushPendingMentions();
   }
@@ -496,6 +496,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
       type: "mentionsPicked",
       id: this.pendingMentions.id,
       attachments: this.pendingMentions.attachments,
+      ...(this.pendingMentions.offset !== undefined ? { offset: this.pendingMentions.offset } : {}),
     });
   }
 
@@ -876,7 +877,7 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
     }
     switch (message.command) {
       case "fileDrop":
-        await this.handleFileDrop(message.uris);
+        await this.handleFileDrop(message.uris, message.offset);
         return;
       case "mentionsApplied":
         if (this.pendingMentions?.id === message.id) {
@@ -2228,9 +2229,8 @@ class ReasonixChatProvider implements vscode.WebviewViewProvider, vscode.Disposa
           <button id="connectionSettings" class="connection-notice__action" type="button" hidden>Settings</button>
         </div>
       </div>
-      <div id="attachmentTray" class="attachment-tray" aria-live="polite" hidden></div>
       <div class="input-wrap">
-        <textarea id="prompt" rows="2" placeholder="Type your task here..."></textarea>
+        <div id="prompt" class="prompt prompt-empty" contenteditable="plaintext-only" role="textbox" aria-multiline="true" data-placeholder="Type your task here..."></div>
         <div id="composerHint" class="composer-hint">Type @ for context, / for slash command...</div>
         <div id="suggestionMenu" class="suggestion-menu" role="listbox" hidden></div>
         <button id="send" class="send-button" type="submit" aria-label="Send">↑</button>
