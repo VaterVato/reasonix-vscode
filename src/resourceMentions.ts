@@ -17,6 +17,48 @@ const maxTotalBytes = 120_000;
 const maxDirectoryEntries = 80;
 const maxTokenLength = 240;
 
+/**
+ * Characters that would break the @ mention token grammar used by
+ * extractMentionTokens: whitespace plus the token exclusion set, and "%"
+ * (a raw percent could corrupt decodeURIComponent in normalizeMentionPath).
+ */
+const MENTION_TOKEN_BREAKERS = /[\s"')\]}>;,:]|%/;
+
+/**
+ * Builds a human-readable @ mention token for a workspace-relative path.
+ * Only token-breaking characters are percent-encoded; CJK and other
+ * non-ASCII characters stay readable in the composer. The workspace root
+ * itself and extensionless root-level files get a "./" prefix so the
+ * resolver accepts them.
+ */
+export function mentionTokenForPath(relativePath: string, isDirectory: boolean): string {
+  if (relativePath === "") {
+    return "./"; // workspace root directory listing
+  }
+  const encoded = relativePath
+    .split("/")
+    .map((segment) =>
+      segment
+        .split("")
+        .map((ch) => (MENTION_TOKEN_BREAKERS.test(ch) ? percentEncodeChar(ch) : ch))
+        .join("")
+    )
+    .join("/");
+  const token = relativePath.includes("/") || relativePath.includes(".") ? encoded : `./${encoded}`;
+  return isDirectory ? `${token}/` : token;
+}
+
+/**
+ * Percent-encodes a single character at the byte level. encodeURIComponent
+ * is not used because it leaves URI reserved characters such as ' ( ) that
+ * still break the mention token grammar.
+ */
+function percentEncodeChar(ch: string): string {
+  return Array.from(new TextEncoder().encode(ch))
+    .map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`)
+    .join("");
+}
+
 export async function buildPromptBlocks(prompt: string, workspacePath: string): Promise<{ blocks: ContentBlock[]; mentions: FileMention[] }> {
   const mentions = await resolveFileMentions(prompt, workspacePath);
   const resources: ContentBlock[] = mentions.map((mention) => ({

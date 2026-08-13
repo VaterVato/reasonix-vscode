@@ -29,7 +29,7 @@ import { buildEditorContextBlock, configuredSelectionMode, type IncludeSelection
 import { WorkspaceFileBridge } from "./fileBridge";
 import { DiffPreviewProvider } from "./preview";
 import { normalizeReasonixPath, selectReasonixPath } from "./reasonixLauncher";
-import { buildPromptBlocks } from "./resourceMentions";
+import { buildPromptBlocks, mentionTokenForPath } from "./resourceMentions";
 import { suggestWorkspaceResources } from "./resourceSuggestions";
 import { redactLocalPaths } from "./sanitize";
 import { expandSlashCommand } from "./slashCommands";
@@ -2412,22 +2412,6 @@ function workspaceKey(folder: vscode.WorkspaceFolder): string {
 /** File-backed resources, including remote workspaces (vscode-remote scheme). */
 function isFileResourceUri(uri: vscode.Uri): boolean {
   return uri.scheme === "file" || uri.scheme === "vscode-remote";
-}
-
-/**
- * Builds an @ mention token for a workspace-relative path. Segments are
- * URI-encoded because mention tokens cannot contain whitespace or quotes;
- * the resolver decodes them before use. The workspace root itself and
- * extensionless root-level files get a "./" prefix so the resolver accepts
- * them.
- */
-function mentionTokenForPath(relativePath: string, isDirectory: boolean): string {
-  if (relativePath === "") {
-    return "./"; // workspace root directory listing
-  }
-  const encoded = relativePath.split("/").map(encodeURIComponent).join("/");
-  const token = relativePath.includes("/") || relativePath.includes(".") ? encoded : `./${encoded}`;
-  return isDirectory ? `${token}/` : token;
 }
 
 function emptyState(): WorkspaceChatState {

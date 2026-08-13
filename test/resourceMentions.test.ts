@@ -3,7 +3,36 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPromptBlocks, resolveFileMentions } from "../src/resourceMentions";
+import { buildPromptBlocks, mentionTokenForPath, resolveFileMentions } from "../src/resourceMentions";
+
+test("mentionTokenForPath keeps non-ASCII paths readable", () => {
+  assert.equal(mentionTokenForPath("src/file.ts", false), "src/file.ts");
+  assert.equal(mentionTokenForPath("明星合集类/旁白分析/字幕.srt", false), "明星合集类/旁白分析/字幕.srt");
+  assert.equal(mentionTokenForPath("src/dir", true), "src/dir/");
+  assert.equal(mentionTokenForPath("", true), "./");
+  assert.equal(mentionTokenForPath("README", false), "./README");
+});
+
+test("mentionTokenForPath encodes only token-breaking characters", () => {
+  assert.equal(mentionTokenForPath("a b/c d.txt", false), "a%20b/c%20d.txt");
+  assert.equal(mentionTokenForPath("Jim Carrey's cut (final).txt", false), "Jim%20Carrey%27s%20cut%20(final%29.txt");
+  assert.equal(mentionTokenForPath("100% done.txt", false), "100%25%20done.txt");
+  assert.equal(mentionTokenForPath("明星合集类/旁白分析/Jim Carrey Crashes Jeff Daniels' CONAN Interview.srt", false), "明星合集类/旁白分析/Jim%20Carrey%20Crashes%20Jeff%20Daniels%27%20CONAN%20Interview.srt");
+});
+
+test("mentionTokenForPath tokens resolve back to the original path", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "reasonix-mentions-"));
+  await fs.mkdir(path.join(workspace, "明星合集类"), { recursive: true });
+  await fs.writeFile(path.join(workspace, "明星合集类", "a b.txt"), "hello\n");
+
+  const token = mentionTokenForPath("明星合集类/a b.txt", false);
+  assert.equal(token, "明星合集类/a%20b.txt");
+
+  const mentions = await resolveFileMentions(`check @${token}`, workspace);
+  assert.equal(mentions.length, 1);
+  assert.equal(mentions[0].relativePath, "明星合集类/a b.txt");
+  assert.match(mentions[0].text, /hello/);
+});
 
 test("resolveFileMentions reads workspace-relative @ file references", async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "reasonix-mentions-"));
